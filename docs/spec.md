@@ -65,7 +65,7 @@ shared = Shared.load_or_create()       # ~/.config/awf/shared.json, lazy
 
 **Errors handled.**
 
-- Missing file (anchor) → `ProjectNotFoundError` with cwd context.
+- Missing file (anchor) → `ProjectNotFound` with cwd context.
 - Malformed JSON → `StateCorruptError` pointing to the byte offset.
 - Schema-invalid → `StateValidationError` listing failing fields.
 
@@ -112,7 +112,7 @@ ensure_anchor(root)             # idempotent: creates .awf/project.json from
 - [ ] After `ensure_anchor()`: `.awf/project.json` exists with
       `stage="landing"`, `has.passport=true`.
 - [ ] New project (both files): `.awf/project.json` is preferred.
-- [ ] No project (neither file): raises `ProjectNotFoundError` with
+- [ ] No project (neither file): raises `ProjectNotFound` with
       message including cwd and the directories walked.
 
 ## A3. `lib/log.py` (D-002)
