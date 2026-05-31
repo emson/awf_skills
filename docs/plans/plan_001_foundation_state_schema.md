@@ -1,6 +1,6 @@
 # Plan 001 — Foundation: `.awf/` state schemas
 
-**Status:** implemented
+**Status:** accepted
 **Phase:** A
 **Spec refs:** [`spec.md` § A1](../spec.md#a1-awf-schemas-d-003), [`decisions.md` D-002](../decisions.md#d-002--logging-model), [`decisions.md` D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson), [`decisions.md` D-004](../decisions.md#d-004--libprojectpy-dual-walk-migration)
 **Owner (current):** Reviewer
@@ -518,6 +518,7 @@ over implementation, real files via `tmp_path`, no tautological tests.
 - 2026-05-31  Reviewer — plan review pass 2: ready. All 10 Pass 1 findings resolved; one Minor (N6) requires Lead to lock ProjectNotFound to augmented-message strategy before Dev starts step 5; no re-review needed.
 - 2026-05-31  Lead — locked N6 (ProjectNotFound propagation): re-raise-with-augmented-message + __cause__ preserved.
 - 2026-05-31  Dev — implementation complete. Branch: feat/plan-001-foundation-state-schema. Commits 82eaa64..46b141e (4 commits). 21 tests, all green. Ruff clean. mypy --strict lib/state.py passes. All 13 acceptance criteria verified locally. Note: `Infra.validate()` neon invariant is scoped to trigger only when branch_id/branch_name are non-empty (not on empty default Infra), consistent with plan intent that the rule applies to partially-populated neon config. Reviewer should confirm this interpretation.
+- 2026-05-31  Reviewer — code review pass 1: accepted. 0 blockers, 0 major, 3 minor.
 
 ## Review
 
@@ -650,3 +651,47 @@ All five spec acceptance criteria from `spec.md § A1` are present in the plan:
 **Verdict:** ready
 
 *Conditional on Lead locking N6 to the augmented-message strategy before Dev starts step 5. This does not require a re-review pass — a one-line update to step 2 and step 5 is sufficient.*
+
+---
+
+### Pass 1 (2026-05-31) — code review
+
+**Dev callout responses:**
+
+1. **`Infra.validate()` neon invariant scoping.** Confirmed correct. Step 6 says "all fields default to safe empty values … so `load_or_create()` can mint an empty `Infra`." An unconditional `mode=="shared-branch" → project_id non-empty` rule would fire on every freshly-minted empty Infra (which defaults `mode="shared-branch"`) and break the `load_or_create` contract. Scoping to trigger only when `branch_id` or `branch_name` are non-empty is the right interpretation of "partially-populated neon config." Consistent with D-003 and the plan. No amendment needed.
+
+2. **`_save_impl` `# type: ignore[call-arg]`.** Legitimate type-system limitation. Pydantic v2 `BaseModel` exposes a deprecated classmethod also named `validate`; mypy sees the classmethod signature on the `BaseModel` type and flags the instance call as a `call-arg` error. The three subclasses define instance-method `validate(self) -> None` which is the correct target at runtime. The comment is accurate; it does not mask a bug. The `# type: ignore[attr-defined]` on line 113 (inside `_emit_state_change`) is similarly legitimate — `lib.log` does not exist at type-check time.
+
+**Blockers:** none.
+
+**Major:** none.
+
+**Minor / nits:**
+
+- **N1 — `spec.md` § A1 uses `ProjectNotFoundError`, not `ProjectNotFound` (line 68 and line 115).** The implementation correctly uses `ProjectNotFound` (imported from `lib.project`), which is what the plan locked in step 2 and what the tests assert. The spec has a stale name. `lib/state.py` and `tests/lib/test_state.py` are correct; `docs/spec.md` line 68 and line 115 should be updated to `ProjectNotFound` for consistency. No code change needed — documentation only.
+
+- **N2 — Three `assert root is not None` guards (state.py lines 221, 386, 429) are mypy-satisfaction assertions for a type-annotation gap in `lib/project.py`.** `find_project_root()` returns `Path | None` because `optional=True` is a supported call path; when called without `optional=True` it always raises or returns a `Path`, never `None`. The assertions are harmless and technically correct; a cleaner fix would be an `@overload` in `lib/project.py` to narrow the return type for the non-optional call. That is squarely plan 002 scope (which owns `lib/project.py`). No action needed in this plan.
+
+- **N3 — `test_save_refuses_to_write_invalid_state` and `test_atomic_write_leaves_prior_file_intact_on_crash` access `infra._path` directly (test lines 237, 247, 307, 317).** The testing principles say "don't test internal state"; `_path` is a `PrivateAttr`. The access is forced by the lack of a public path property and is the only practical way to retrieve the file path for on-disk comparison. Acceptable deviation. Consider adding a `@property path(self) -> Path` to each model in a follow-on plan so tests can avoid reaching into private attributes.
+
+**Acceptance criteria verification:**
+
+All 13 criteria (5 spec § A1 + 8 `[plan]`-tagged) are covered by named tests:
+
+| Criterion | Test |
+|---|---|
+| Round-trip | `test_project_anchor_round_trip`, `test_infra_round_trip`, `test_shared_round_trip` |
+| Forward-compat | `test_anchor_tolerates_unknown_top_level_keys`, `test_infra_tolerates_unknown_nested_keys` |
+| `save()` emits `state.change` | `test_save_emits_state_change_via_log_hook` |
+| Cross-field invariants | `test_anchor_rejects_landing_with_infra`, `test_anchor_rejects_bad_slug`, `test_infra_rejects_lb_without_servers`, `test_save_refuses_to_write_invalid_state` |
+| Atomic write | `test_atomic_write_leaves_prior_file_intact_on_crash`, `test_atomic_write_creates_parent_dir` |
+| Missing anchor → `ProjectNotFound` | `test_load_missing_anchor_raises_project_not_found`, `test_infra_load_missing_project_raises_project_not_found` |
+| Malformed JSON → `StateCorruptError` | `test_load_malformed_json_raises_corrupt` |
+| `load_or_create` no premature write | `test_infra_load_or_create_does_not_create_file_until_save` |
+| `Shared` uses `user_config_dir()` | `test_shared_load_or_create_uses_awf_home` |
+| Log signature `(file, key, before, after)` | `test_save_emits_state_change_via_log_hook` |
+| Log import-safe | `test_save_when_log_unavailable_does_not_raise` |
+| All models extra="allow" | `test_anchor_tolerates_unknown_top_level_keys`, `test_infra_tolerates_unknown_nested_keys` |
+| mypy --strict + ruff clean | Verified by Reviewer (both pass) |
+
+**Verdict:** accepted
