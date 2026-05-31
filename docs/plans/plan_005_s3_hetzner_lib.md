@@ -1,9 +1,9 @@
 # Plan 005 — S3 enabler: `lib/hetzner.py` (port from `hetzner_deploy`)
 
-**Status:** ready
+**Status:** implemented
 **Phase:** B
 **Spec refs:** [`spec.md` § B1](../spec.md#b1-libhetznerpy-port-from-hetzner_deploy), [`decisions.md` D-001](../decisions.md#d-001--multi-stage-architecture-pattern), [`decisions.md` D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson), [`01-principles.md` A1/A5](../01-principles.md)
-**Owner (current):** Lead
+**Owner (current):** Reviewer
 **Created:** 2026-05-31
 **Updated:** 2026-05-31
 
@@ -382,30 +382,30 @@ clean.
 
 Spec B1 (restated and clarified):
 
-- [ ] `HetznerClient.from_env()` builds a working client from
+- [x] `HetznerClient.from_env()` builds a working client from
       `HETZNER_API_TOKEN` resolved through the layered config (A6).
-- [ ] `servers.get_or_create` / `firewalls.ensure` / `lb.get_or_create`
+- [x] `servers.get_or_create` / `firewalls.ensure` / `lb.get_or_create`
       / `ssh_keys.get_or_create` / `networks.get_or_create` are
       idempotent: second call with same args returns the same
       resource, makes no create call, logs `api.call` with no
       follow-up create.
-- [ ] `firewalls.ensure` converges rules: second call with changed
+- [x] `firewalls.ensure` converges rules: second call with changed
       rules replaces them; second call with identical rules skips.
-- [ ] Every API call (read or write) emits exactly one `api.call`
+- [x] Every API call (read or write) emits exactly one `api.call`
       event with `provider="hetzner"`, a method, a synthetic path,
       a status code, and (for resource-bearing calls) a `resource_id`.
-- [ ] The bearer token never appears in any line of `.awf/log.jsonl`
+- [x] The bearer token never appears in any line of `.awf/log.jsonl`
       written during a test run. (Verified by reading the jsonl back
       and grep-asserting absence.)
-- [ ] Network/rate-limit errors raise `HetznerNetworkError` /
+- [x] Network/rate-limit errors raise `HetznerNetworkError` /
       `HetznerRateLimited` with `retryable=True`; auth/4xx errors
       raise non-retryable variants. No automatic retry inside the
       library.
-- [ ] Every public method has a docstring stating: what it does,
+- [x] Every public method has a docstring stating: what it does,
       what it logs, what it raises, and the idempotency contract.
-- [ ] `mypy --strict lib/hetzner.py` clean.
-- [ ] `ruff check lib/hetzner.py` clean.
-- [ ] 25 tests in `tests/lib/test_hetzner.py` green.
+- [x] `mypy --strict lib/hetzner.py` clean.
+- [x] `ruff check lib/hetzner.py` clean.
+- [x] 25 tests in `tests/lib/test_hetzner.py` green.
 
 **Spec criterion explicitly renegotiated:** "All 47 tests from
 `hetzner_deploy/packages/provision/tests` pass" is replaced with the
@@ -551,3 +551,4 @@ a re-review pass. Implementation may start after both edits are made.
 | 2026-05-31 | draft | Lead | Initial plan created |
 | 2026-05-31 | reviewed — approved with conditions | Reviewer | Pass 1: T1 approved, T2 approved (option a), T3 confirmed; two mechanical conditions before implementation |
 | 2026-05-31 | ready | Orchestrator | Applied both Pass-1 conditions: image default `docker-ce` → `ubuntu-24.04` (plan public API + spec § B1); test-count AC in spec § B1 updated to reference 25-test scope and plan's "Test reality check" |
+| 2026-05-31 | implemented | Dev | `lib/hetzner.py` (~780 lines), `tests/lib/test_hetzner.py` (25 tests), `mypy.ini` hcloud stanza. All 25 tests green; mypy --strict clean; ruff clean; full suite 100/100. |
