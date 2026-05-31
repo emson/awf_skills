@@ -1,6 +1,6 @@
 # Plan 006 — S3 enabler: `lib/neon/` (Neon database API client)
 
-**Status:** ready
+**Status:** implemented
 **Phase:** B
 **Spec refs:** [`spec.md` § B2](../spec.md#b2-libneonpy-new), [`decisions.md` D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson), [`01-principles.md` A1/A5/A6](../01-principles.md)
 **Owner (current):** Reviewer
@@ -357,26 +357,27 @@ matches. This is the plan-005 M3/M4 regression encoded as test.
 
 Spec B2 (restated and clarified) + plan additions:
 
-- [ ] `projects.get_or_create` / `branches.get_or_create` idempotent:
+- [x] `projects.get_or_create` / `branches.get_or_create` idempotent:
       second call returns same IDs, issues no POST, logs only the
       list/search call.
-- [ ] `branches.connection_string()` return value contains
+- [x] `branches.connection_string()` return value contains
       `?sslmode=require` (test pins exact substring).
-- [ ] `NEON_API_KEY` never appears in any line of `.awf/log.jsonl`
+- [x] `NEON_API_KEY` never appears in any line of `.awf/log.jsonl`
       written during a test run (grep-assert).
-- [ ] Connection-string return value (which embeds the role password)
+- [x] Connection-string return value (which embeds the role password)
       never appears in any line of `.awf/log.jsonl` (grep-assert).
-- [ ] `branches.delete(project_id, branch_id)` returns `True` on
+- [x] `branches.delete(project_id, branch_id)` returns `True` on
       success, `False` on 404; idempotent for teardown.
-- [ ] **All HTTP calls route through `NeonClient._call`.** Grep test:
+- [x] **All HTTP calls route through `NeonClient._call`.** Grep test:
       `grep -rn "self._http." lib/neon/resources/` returns zero
       matches. Bare `httpx` calls in `resources/` fail CI.
-- [ ] **Every file in `lib/neon/` ≤ 200 lines.** Hard cap.
-- [ ] Every public method has a docstring stating: what it does,
+- [x] **Every file in `lib/neon/` ≤ 200 lines.** Hard cap.
+- [x] Every public method has a docstring stating: what it does,
       what it logs, what it raises, idempotency contract.
-- [ ] `mypy --strict lib/neon/` clean.
-- [ ] `ruff check lib/neon/` clean.
-- [ ] 22 tests in `tests/lib/test_neon.py` green; full suite green.
+- [x] `mypy --strict lib/neon/` clean (one pre-existing lib/state.py
+      unused-ignore unrelated to this plan).
+- [x] `ruff check lib/neon/` clean.
+- [x] 23 tests in `tests/lib/test_neon.py` green; full suite (123) green.
 
 ## Risks / open questions for Reviewer
 
@@ -479,3 +480,4 @@ APPROVED. The try-by-id-then-search internal branch is at most two API calls and
 |------|--------|-------|------|
 | 2026-06-01 | draft | Lead | Initial plan created; encodes plan-005 lessons (package-from-day-one, `_call` from day-one, 200-line cap, structural grep test). |
 | 2026-06-01 | review-approved | Reviewer | Pass 1: all four tensions approved; two Minor advisories (T2 ssl-append warning log, T4 disambiguation docstring). Handoff to Dev. |
+| 2026-06-01 | implemented | Dev | lib/neon/ package (client, errors, operations, connection, resources/projects, resources/branches). 23 tests green, full suite 123/123. ruff clean. mypy --strict clean on lib/neon/ (one pre-existing lib/state.py unused-ignore). All acceptance criteria met. T2: ssl-append emits log.note. T4: disambiguation docstring in _Projects.get. |
