@@ -4,9 +4,10 @@ A portable suite of Claude Code skills that scaffold, configure, deploy,
 and register a small Svelte website end-to-end — from a fresh domain
 through to Bing IndexNow — usable from any directory on disk.
 
-> Status: scaffold + spine. `awf-doctor` is functional; the pipeline
-> skills are stubs (SKILL.md only) being filled in per the build order
-> in [`docs/00-plan.md`](docs/00-plan.md).
+> Status: S1 (landing page on Cloudflare Pages) is fully implemented.
+> S2–S5 — demo, MVP-play on shared Hetzner+Neon, prescale, scale —
+> are specified in [`docs/07-multi-stage-architecture.md`](docs/07-multi-stage-architecture.md)
+> and built incrementally from the same skill model.
 
 ---
 
@@ -14,7 +15,7 @@ through to Bing IndexNow — usable from any directory on disk.
 
 ```bash
 # 1. Clone (recommended path is ~/.claude/awf-skills/)
-git clone <this-repo> ~/.claude/awf-skills
+git clone https://github.com/emson/awf-skills.git ~/.claude/awf-skills
 cd ~/.claude/awf-skills
 
 # 2. Install (symlinks each skills/awf-* into ~/.claude/skills/)
@@ -40,11 +41,16 @@ cd ~/.claude/awf-skills
 - **Composable.** Each skill is one verb. The `awf-launch`
   orchestrator sequences them with explicit checkpoints at the
   irreducibly-manual steps.
+- **Promotable.** The same project moves up a five-stage ladder
+  (landing → demo → MVP-play → prescale → scale) via composer
+  skills, without re-architecting. See
+  [`docs/07-multi-stage-architecture.md`](docs/07-multi-stage-architecture.md).
 
 ## What this is not
 
-- Not a multi-host adapter framework. The stack is hardcoded:
-  Cloudflare + Namecheap + Fathom + GSC + Bing.
+- Not a multi-host adapter framework. The S1 stack is hardcoded
+  (Cloudflare + Namecheap + Fathom + GSC + Bing); S3–S5 layer on
+  Hetzner + Neon + Kamal.
 - Not a domain registrar. Buying domains is out of scope.
 - Not a credentials manager beyond layered `.env` files.
 - Not yet a Claude Code plugin. Plugin packaging is a future polish.
@@ -97,6 +103,11 @@ In recommended reading order:
 7. [`docs/06-experimentation-guide.md`](docs/06-experimentation-guide.md) —
    hands-on walkthrough across four tiers (dry → local build →
    API-side → full launch).
+8. [`docs/07-multi-stage-architecture.md`](docs/07-multi-stage-architecture.md) —
+   the S1–S5 stage ladder, two-layer skill model, project anchor
+   split. Locked-in pattern; implementation is incremental.
+9. [`docs/decisions.md`](docs/decisions.md) — append-only decision
+   log (ADR-lite).
 
 ---
 

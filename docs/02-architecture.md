@@ -20,7 +20,10 @@ awf_skills/
 │   ├── 02-architecture.md        ← this file
 │   ├── 03-passport-contract.md
 │   ├── 04-skill-authoring.md
-│   └── 05-credentials.md
+│   ├── 05-credentials.md
+│   ├── 06-experimentation-guide.md
+│   ├── 07-multi-stage-architecture.md   ← S1–S5 stage ladder, locked in
+│   └── decisions.md              ← ADR log
 │
 ├── lib/                          ← shared Python, imported by uv-scripts
 │   ├── __init__.py
