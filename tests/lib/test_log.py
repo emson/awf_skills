@@ -681,3 +681,55 @@ def test_session_outside_project_falls_back_to_orphan_log(
     assert len(lines) > 0
     for line in lines:
         json.loads(line)  # must be valid JSON
+
+
+# ---------------------------------------------------------------------------
+# log.process event (plan_007 addition)
+# ---------------------------------------------------------------------------
+
+
+def test_log_process_emits_correct_event_shape(tmp_path: Path) -> None:
+    """log.process() emits a process.invoke event with cmd, exit_code, duration_ms, cwd."""
+    project_root = _make_project(tmp_path)
+    log._current_project_root.set(project_root)
+    try:
+        log.process(
+            cmd=["kamal", "deploy"],
+            exit_code=0,
+            duration_ms=123,
+            cwd="/tmp/my-project",
+        )
+    finally:
+        log._current_project_root.set(None)
+
+    events = _read_log_lines(project_root)
+    process_events = [e for e in events if e.get("type") == "process.invoke"]
+    assert len(process_events) == 1
+
+    evt = process_events[0]
+    assert evt["result"] == "ok"
+    data = evt["data"]
+    assert data["cmd"] == ["kamal", "deploy"]
+    assert data["exit_code"] == 0
+    assert data["duration_ms"] == 123
+    assert data["cwd"] == "/tmp/my-project"
+
+
+def test_log_process_non_zero_exit_result_is_fail(tmp_path: Path) -> None:
+    """log.process() with exit_code != 0 sets result='fail'."""
+    project_root = _make_project(tmp_path)
+    log._current_project_root.set(project_root)
+    try:
+        log.process(
+            cmd=["kamal", "setup"],
+            exit_code=1,
+            duration_ms=50,
+            cwd="/tmp/my-project",
+        )
+    finally:
+        log._current_project_root.set(None)
+
+    events = _read_log_lines(project_root)
+    process_events = [e for e in events if e.get("type") == "process.invoke"]
+    assert len(process_events) == 1
+    assert process_events[0]["result"] == "fail"

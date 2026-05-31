@@ -689,6 +689,41 @@ def note(
     except Exception as e:  # noqa: BLE001
         print(f"warn: log.note failed: {e}", file=sys.stderr)
 
+
+def process(
+    cmd: list[str],
+    exit_code: int,
+    duration_ms: int,
+    cwd: str,
+) -> None:
+    """Emit a process.invoke event for a subprocess invocation.
+
+    Analogous to ``log.api`` for HTTP round-trips: one event per subprocess
+    call, with the same redaction guarantees. Stdout/stderr bodies are NOT
+    logged (they may contain registry auth artefacts).
+
+    Args:
+        cmd:         Full command list including the binary (e.g. ["kamal", "deploy"]).
+        exit_code:   Process return code (0 = success).
+        duration_ms: Wall-clock time in milliseconds.
+        cwd:         Working directory as a string.
+
+    This function never raises (D-002 op rule 1).
+    """
+    try:
+        event_result = "ok" if exit_code == 0 else "fail"
+        data: dict[str, Any] = {
+            "cmd": cmd,
+            "exit_code": exit_code,
+            "duration_ms": duration_ms,
+            "cwd": cwd,
+        }
+        _write_event(_build_record("process.invoke", result=event_result, data=data))
+        if (s := _current_summary.get()) is not None:
+            s["events_count"] += 1
+    except Exception as e:  # noqa: BLE001
+        print(f"warn: log.process failed: {e}", file=sys.stderr)
+
 # ---------------------------------------------------------------------------
 # Dry-run toggle
 # ---------------------------------------------------------------------------
