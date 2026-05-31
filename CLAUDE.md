@@ -9,7 +9,9 @@ Read in this order:
 2. [`docs/01-principles.md`](docs/01-principles.md) — 17 axioms (A1–A17) that govern all design
 3. [`docs/02-architecture.md`](docs/02-architecture.md) — repo layout, file resolution, how it all fits together
 4. [`docs/07-multi-stage-architecture.md`](docs/07-multi-stage-architecture.md) — S1–S5 stage ladder, two-layer skill model, project anchor split
-5. [`docs/decisions.md`](docs/decisions.md) — append-only decision log; check open decisions (D-OPEN-*) before designing
+5. [`docs/08-logging.md`](docs/08-logging.md) — event log, redaction, `awf-log`
+6. [`docs/spec.md`](docs/spec.md) — build-ready module spec (Phases A–E); start here when implementing
+7. [`docs/decisions.md`](docs/decisions.md) — ADR log; check open decisions (D-OPEN-*) before designing
 
 Then pick the specific doc for the work you're doing:
 - **Modifying a skill**: [`docs/04-skill-authoring.md`](docs/04-skill-authoring.md)

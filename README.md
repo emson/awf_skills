@@ -106,8 +106,12 @@ In recommended reading order:
 8. [`docs/07-multi-stage-architecture.md`](docs/07-multi-stage-architecture.md) —
    the S1–S5 stage ladder, two-layer skill model, project anchor
    split. Locked-in pattern; implementation is incremental.
-9. [`docs/decisions.md`](docs/decisions.md) — append-only decision
-   log (ADR-lite).
+9. [`docs/08-logging.md`](docs/08-logging.md) — per-project event
+   log, redaction policy, `awf-log` skill.
+10. [`docs/spec.md`](docs/spec.md) — build-ready module spec for
+    Phases A–E (foundation → S3 → affordances → cheap-essentials).
+11. [`docs/decisions.md`](docs/decisions.md) — append-only ADR log
+    (D-001 … D-009).
 
 ---
 

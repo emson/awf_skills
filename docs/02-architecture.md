@@ -23,7 +23,11 @@ awf_skills/
 │   ├── 05-credentials.md
 │   ├── 06-experimentation-guide.md
 │   ├── 07-multi-stage-architecture.md   ← S1–S5 stage ladder, locked in
-│   └── decisions.md              ← ADR log
+│   ├── 08-logging.md             ← per-project event log, awf-log skill
+│   ├── spec.md                   ← build-ready module spec (Phases A–E)
+│   ├── decisions.md              ← ADR log (D-001 … D-009 + open items)
+│   └── notes/                    ← brainstorm + exploration (SpecForge convention)
+│       └── concepts-and-priorities.md
 │
 ├── lib/                          ← shared Python, imported by uv-scripts
 │   ├── __init__.py

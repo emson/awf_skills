@@ -12,3 +12,7 @@ token.json
 .ruff_cache/
 *creds.json
 
+# Runtime logs (per-project event stream; tracked-state lives in .awf/project.json + infra.json)
+.awf/log.jsonl
+.awf/logs/
+
