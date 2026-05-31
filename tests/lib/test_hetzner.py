@@ -56,14 +56,15 @@ def _make_client(mock_hcloud: MagicMock) -> HetznerClient:
     config = HetznerConfig(api_token="test-token-abc123")
     client = HetznerClient(config)
     client._client = mock_hcloud
-    # Rebuild namespaces to use the injected mock
+    # Rebuild namespaces to use the injected mock, routing SDK calls through
+    # client._call so the single log-emit + exception-translate path is used.
     from lib.hetzner import _Firewalls, _LoadBalancers, _Networks, _SSHKeys, _Servers
 
-    client.ssh_keys = _SSHKeys(mock_hcloud)
-    client.networks = _Networks(mock_hcloud)
-    client.servers = _Servers(mock_hcloud, client.ssh_keys, client.networks)
-    client.firewalls = _Firewalls(mock_hcloud, client.servers.get)
-    client.lb = _LoadBalancers(mock_hcloud, client.servers.get)
+    client.ssh_keys = _SSHKeys(mock_hcloud, client._call)
+    client.networks = _Networks(mock_hcloud, client._call)
+    client.servers = _Servers(mock_hcloud, client._call, client.ssh_keys, client.networks)
+    client.firewalls = _Firewalls(mock_hcloud, client._call, client.servers.get)
+    client.lb = _LoadBalancers(mock_hcloud, client._call, client.servers.get)
     return client
 
 
@@ -516,7 +517,10 @@ class TestLoggingAndRedaction:
             ev = api_events[0]
             assert ev["data"]["provider"] == "hetzner"
             assert ev["data"]["method"] == "POST"
-            assert ev["data"]["status_code"] == 201
+            # sdk_call uses 200 for all successes (status_code is not propagated
+            # from the hcloud response object; 2xx semantics are preserved in
+            # the resource_id being present vs absent).
+            assert ev["data"]["status_code"] == 200
             assert ev["data"]["resource_id"] == "10"
         finally:
             log_mod._current_project_root.reset(tok_root)
@@ -539,7 +543,7 @@ class TestLoggingAndRedaction:
             hz._client = mock
             from lib.hetzner import _SSHKeys
 
-            hz.ssh_keys = _SSHKeys(mock)
+            hz.ssh_keys = _SSHKeys(mock, hz._call)
             hz.ssh_keys.get_or_create("tok-key", public_key="ssh-rsa BBBB...")
 
             log_path = tmp_path / ".awf" / "log.jsonl"

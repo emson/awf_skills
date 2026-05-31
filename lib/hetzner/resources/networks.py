@@ -7,19 +7,21 @@ References:
 
 from __future__ import annotations
 
+from typing import Callable
+
 import hcloud
 from hcloud import Client
 from hcloud.networks import Network, NetworkSubnet
 
-from lib import log
-from lib.hetzner.errors import api_status, translate
+from lib.hetzner.errors import translate
 
 
 class _Networks:
     """Manage Hetzner private networks with search-or-create semantics."""
 
-    def __init__(self, client: Client) -> None:
+    def __init__(self, client: Client, caller: Callable[..., object]) -> None:
         self._client = client
+        self._call = caller
 
     def get_or_create(
         self,
@@ -51,53 +53,30 @@ class _Networks:
         """
         existing = self.get(name)
         if existing is not None:
-            log.api(
-                provider="hetzner",
-                method="GET",
-                path="/networks",
-                status_code=200,
+            return self._call(  # type: ignore[return-value]
+                "GET", "/networks",
+                lambda: existing,
                 resource_id=str(existing.id),
             )
-            return existing
-        # Network absent — create it with subnets inline
         subnet = NetworkSubnet(
             ip_range=subnet_range,
             type="cloud",
             network_zone=subnet_zone,
         )
-        try:
-            network = self._client.networks.create(
+        return self._call(  # type: ignore[return-value]
+            "POST", "/networks",
+            lambda: self._client.networks.create(
                 name=name,
                 ip_range=ip_range,
                 subnets=[subnet],
-            )
-            log.api(
-                provider="hetzner",
-                method="POST",
-                path="/networks",
-                status_code=201,
-                resource_id=str(network.id),
-            )
-            return network
-        except hcloud.APIException as exc:
-            log.api(
-                provider="hetzner",
-                method="POST",
-                path="/networks",
-                status_code=api_status(exc),
-            )
-            raise translate(exc) from exc
-        except Exception as exc:
-            log.api(
-                provider="hetzner",
-                method="POST",
-                path="/networks",
-                status_code=0,
-            )
-            raise translate(exc) from exc
+            ),
+        )
 
     def get(self, name: str) -> Network | None:
         """Return the named network, or None if not found.
+
+        Internal probe used by get_or_create. Does not emit a log event so
+        the outer method controls exactly one log entry per public operation.
 
         Args:
             name: Network name.
@@ -131,36 +110,10 @@ class _Networks:
         """
         existing = self.get(name)
         if existing is None:
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/networks",
-                status_code=404,
-            )
             return False
-        try:
-            self._client.networks.delete(existing)
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/networks",
-                status_code=204,
-                resource_id=str(existing.id),
-            )
-            return True
-        except hcloud.APIException as exc:
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/networks",
-                status_code=api_status(exc),
-            )
-            raise translate(exc) from exc
-        except Exception as exc:
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/networks",
-                status_code=0,
-            )
-            raise translate(exc) from exc
+        self._call(
+            "DELETE", "/networks",
+            lambda: self._client.networks.delete(existing),
+            resource_id=str(existing.id),
+        )
+        return True

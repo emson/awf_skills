@@ -20,9 +20,8 @@ from hcloud.load_balancers import (
 from hcloud.locations import Location
 from hcloud.servers import Server
 
-from lib import log
-from lib.hetzner.errors import HetznerError, HetznerNotFound, api_status, translate
-from lib.hetzner.client import wait_for_action
+from lib.hetzner.errors import HetznerNotFound, translate
+from lib.hetzner.actions import wait_for_action
 
 
 class _LoadBalancers:
@@ -31,9 +30,11 @@ class _LoadBalancers:
     def __init__(
         self,
         client: Client,
+        caller: Callable[..., object],
         servers_getter: Callable[[str], Server | None],
     ) -> None:
         self._client = client
+        self._call = caller
         self._servers_getter = servers_getter
 
     def get_or_create(
@@ -75,14 +76,11 @@ class _LoadBalancers:
         """
         existing = self.get(name)
         if existing is not None:
-            log.api(
-                provider="hetzner",
-                method="GET",
-                path="/load_balancers",
-                status_code=200,
+            return self._call(  # type: ignore[return-value]
+                "GET", "/load_balancers",
+                lambda: existing,
                 resource_id=str(existing.id),
             )
-            return existing
 
         # Resolve LB type
         lb_type_obj: LoadBalancerType | None = self._client.load_balancer_types.get_by_name(type)
@@ -104,7 +102,7 @@ class _LoadBalancers:
             # The SDK accepts any Server-like object at runtime.
             target_objs.append(LoadBalancerTarget(type="server", server=server))  # type: ignore[arg-type]
 
-        try:
+        def _create() -> LoadBalancer:
             response = self._client.load_balancers.create(
                 name=name,
                 load_balancer_type=lb_type_obj,
@@ -113,40 +111,20 @@ class _LoadBalancers:
                 services=services,
                 labels={},
             )
-            lb: LoadBalancer = response.load_balancer
-            # Poll creation action if present
             if response.action is not None:
                 wait_for_action(self._client, response.action)
+            return response.load_balancer
 
-            log.api(
-                provider="hetzner",
-                method="POST",
-                path="/load_balancers",
-                status_code=201,
-                resource_id=str(lb.id),
-            )
-            return lb
-        except hcloud.APIException as exc:
-            log.api(
-                provider="hetzner",
-                method="POST",
-                path="/load_balancers",
-                status_code=api_status(exc),
-            )
-            raise translate(exc) from exc
-        except HetznerError:
-            raise
-        except Exception as exc:
-            log.api(
-                provider="hetzner",
-                method="POST",
-                path="/load_balancers",
-                status_code=0,
-            )
-            raise translate(exc) from exc
+        return self._call(  # type: ignore[return-value]
+            "POST", "/load_balancers",
+            _create,
+        )
 
     def get(self, name: str) -> LoadBalancer | None:
         """Return the named load balancer, or None if not found.
+
+        Internal probe used by get_or_create. Does not emit a log event so
+        the outer method controls exactly one log entry per public operation.
 
         Args:
             name: Load balancer name.
@@ -180,36 +158,10 @@ class _LoadBalancers:
         """
         existing = self.get(name)
         if existing is None:
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/load_balancers",
-                status_code=404,
-            )
             return False
-        try:
-            self._client.load_balancers.delete(existing)
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/load_balancers",
-                status_code=204,
-                resource_id=str(existing.id),
-            )
-            return True
-        except hcloud.APIException as exc:
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/load_balancers",
-                status_code=api_status(exc),
-            )
-            raise translate(exc) from exc
-        except Exception as exc:
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/load_balancers",
-                status_code=0,
-            )
-            raise translate(exc) from exc
+        self._call(
+            "DELETE", "/load_balancers",
+            lambda: self._client.load_balancers.delete(existing),
+            resource_id=str(existing.id),
+        )
+        return True

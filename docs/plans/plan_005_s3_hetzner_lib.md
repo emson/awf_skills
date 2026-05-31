@@ -1,6 +1,6 @@
 # Plan 005 — S3 enabler: `lib/hetzner.py` (port from `hetzner_deploy`)
 
-**Status:** changes requested
+**Status:** changes requested (pass 2)
 **Phase:** B
 **Spec refs:** [`spec.md` § B1](../spec.md#b1-libhetznerpy-port-from-hetzner_deploy), [`decisions.md` D-001](../decisions.md#d-001--multi-stage-architecture-pattern), [`decisions.md` D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson), [`01-principles.md` A1/A5](../01-principles.md)
 **Owner (current):** Reviewer
@@ -610,6 +610,59 @@ The Orchestrator's status log entry (2026-05-31, "ready") claims: *"Applied both
 
 ---
 
+### Pass 2 (2026-06-01) — code review
+
+**Reviewer:** Reviewer agent
+**Verdict:** changes requested — 1 Major, 1 Minor. Not `accepted`.
+
+**Commands run:**
+
+```
+git diff HEAD~1 HEAD --stat
+  → 11 files changed, 1517 insertions(+), 1222 deletions(-): lib/hetzner.py deleted,
+    lib/hetzner/ package created with __init__.py, client.py, errors.py,
+    resources/{__init__,ssh_keys,networks,servers,firewalls,lb}.py; plan updated.
+
+pytest tests/ -v               → 100/100 green
+uvx ruff check lib/hetzner/ tests/lib/test_hetzner.py  → All checks passed
+uvx --with pydantic --with hcloud mypy --strict lib/hetzner/
+  → 1 error: lib/state.py:113 (pre-existing, outside this PR's scope); hetzner/ clean
+wc -l lib/hetzner/**/*.py
+  → client.py 244, firewalls.py 271, servers.py 234, lb.py 215, networks.py 166,
+    __init__.py 85, errors.py 132, ssh_keys.py 100; total 1448
+```
+
+---
+
+**[MAJOR-1] `_call` exists on HetznerClient but resource classes do not route through it.**
+
+The M2 requirement was: *"Every SDK call goes through a single private helper `_call(method, path, fn, resource_id=…)`."* The rework added `_call` and `_extract_id` to `client.py` — that part is correct. However, the resource classes (`_Servers`, `_Firewalls`, `_LoadBalancers`, `_Networks`, `_SSHKeys`) each receive the raw `hcloud.Client` at construction and call it directly. Every method still inlines its own try/except + log.api block. The `_call` wrapper on `HetznerClient` is structurally unreachable from any resource method.
+
+Evidence: `grep -rn "self._client." lib/hetzner/resources/` returns 18 raw hcloud calls across servers.py, firewalls.py, and lb.py — none mediated by `_call`. `grep -n "_call(" lib/hetzner/resources/servers.py` returns zero lines.
+
+The fix: resource classes must accept (or hold a reference to) the `HetznerClient._call` callable, not the raw `hcloud.Client`. The simplest approach is to pass `self._call` (bound method) into each resource namespace at construction, replacing the current `client: Client` parameter. Alternatively, pass the `HetznerClient` itself. Either way, all resource try/except + log.api blocks should collapse into single-line `self._call("POST", "/servers", lambda: …)` calls — eliminating the remaining duplication and fulfilling the design contract.
+
+**[MINOR-1] Four files exceed the plan's 200-line-per-file guideline.**
+
+Line counts: `firewalls.py` 271, `client.py` 244, `servers.py` 234, `lb.py` 215. The Pass 1 review's required split was `lib/hetzner/` — that is done. The plan's stated per-file threshold is 200 lines. Addressing the Major above (collapsing inline try/except blocks via `_call`) will mechanically reduce `servers.py`, `firewalls.py`, and `lb.py` significantly. `client.py` carries the `wait_for_action` polling loop and full `_call` docstring; splitting `wait_for_action` into `lib/hetzner/actions.py` would bring `client.py` under threshold without design cost. These overruns are a direct consequence of the inline duplication; fixing the Major should bring most files under 200 automatically.
+
+---
+
+**Checklist results (pass 2):**
+
+| Item | Result |
+|------|--------|
+| 100/100 tests pass | Pass |
+| ruff clean | Pass |
+| mypy --strict clean (hetzner/ scope) | Pass — 1 pre-existing error in state.py unrelated to this PR |
+| `_call` wrapper exists | Pass — present in client.py |
+| `_extract_id` consumed by `_call` | Pass — `_extract_id` is called inside `_call` |
+| Resource methods route through `_call` | **FAIL** — resource classes hold raw hcloud.Client; all 18 SDK call sites are direct |
+| Public import `from lib.hetzner import HetznerClient` works | Pass — confirmed by test suite (requires hcloud installed) |
+| All files <200 lines | **FAIL** — firewalls.py 271, client.py 244, servers.py 234, lb.py 215 |
+
+---
+
 ## Status log
 
 | Date | Status | Actor | Note |
@@ -620,3 +673,5 @@ The Orchestrator's status log entry (2026-05-31, "ready") claims: *"Applied both
 | 2026-05-31 | implemented | Dev | `lib/hetzner.py` (~780 lines), `tests/lib/test_hetzner.py` (25 tests), `mypy.ini` hcloud stanza. All 25 tests green; mypy --strict clean; ruff clean; full suite 100/100. |
 | 2026-05-31 | changes requested | Reviewer | Pass 1 code review: 2 Majors (file 1221 lines vs 800-line split threshold; `_call` wrapper not implemented), 2 Minors (dead `_extract_id`; spec.md § B1 `docker-ce` stale). Blocked on Majors. |
 | 2026-05-31 | implemented (pass 1 rework) | Dev | Addressed code review pass 1: M1 (split `lib/hetzner.py` to `lib/hetzner/` package — `__init__.py`, `client.py`, `errors.py`, `resources/{ssh_keys,networks,servers,firewalls,lb}.py`); M2 (`_call` wrapper added to `HetznerClient`); dead `_extract_id` kept (now live via `_call`). All 25 tests green; full suite 100/100; ruff + mypy --strict clean. |
+| 2026-06-01 | changes requested | Reviewer | Pass 2 code review: 1 Major (`_call` wrapper exists on HetznerClient but resource classes bypass it — direct hcloud.Client calls + inline try/except remain), 1 Minor (4 files exceed 200 lines: firewalls.py 271, client.py 244, servers.py 234, lb.py 215). Blocked on Major. |
+| 2026-06-01 | implemented (pass 2 rework) | Dev | Addressed code review pass 2: M3 (all resource classes now receive `caller` bound method at construction and route every SDK call through it — 18 direct SDK call sites collapsed); extracted `wait_for_action` + `sdk_call` free function to `lib/hetzner/actions.py`; all files ≤190 lines; 25/25 tests green; full suite 100/100; ruff + mypy --strict clean. |

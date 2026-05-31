@@ -14,9 +14,8 @@ from hcloud import Client
 from hcloud.firewalls import Firewall, FirewallResource, FirewallRule
 from hcloud.servers import Server
 
-from lib import log
-from lib.hetzner.errors import HetznerError, HetznerNotFound, api_status, translate
-from lib.hetzner.client import wait_for_action
+from lib.hetzner.errors import HetznerNotFound, translate
+from lib.hetzner.actions import wait_for_action
 
 
 class _Firewalls:
@@ -25,9 +24,11 @@ class _Firewalls:
     def __init__(
         self,
         client: Client,
+        caller: Callable[..., object],
         servers_getter: Callable[[str], Server | None],
     ) -> None:
         self._client = client
+        self._call = caller
         self._servers_getter = servers_getter
 
     def _rules_equal(self, a: list[FirewallRule], b: list[FirewallRule]) -> bool:
@@ -86,76 +87,35 @@ class _Firewalls:
         """
         existing = self.get(name)
         if existing is None:
-            # Create firewall shell (no rules yet — set separately)
-            try:
+            def _create_fw() -> Firewall:
                 response = self._client.firewalls.create(name=name)
-                firewall: Firewall = response.firewall
-                log.api(
-                    provider="hetzner",
-                    method="POST",
-                    path="/firewalls",
-                    status_code=201,
-                    resource_id=str(firewall.id),
-                )
-            except hcloud.APIException as exc:
-                log.api(
-                    provider="hetzner",
-                    method="POST",
-                    path="/firewalls",
-                    status_code=api_status(exc),
-                )
-                raise translate(exc) from exc
-            except Exception as exc:
-                log.api(
-                    provider="hetzner",
-                    method="POST",
-                    path="/firewalls",
-                    status_code=0,
-                )
-                raise translate(exc) from exc
+                return response.firewall
+
+            firewall: Firewall = self._call(  # type: ignore[assignment]
+                "POST", "/firewalls", _create_fw
+            )
         else:
             firewall = existing
 
         # Diff rules
         current_rules: list[FirewallRule] = firewall.rules or []
         if self._rules_equal(current_rules, rules):
-            log.api(
-                provider="hetzner",
-                method="GET",
-                path="/firewalls",
-                status_code=200,
+            self._call(
+                "GET", "/firewalls",
+                lambda: firewall,
                 resource_id=str(firewall.id),
             )
         else:
-            try:
+            def _set_rules() -> None:
                 actions = self._client.firewalls.set_rules(firewall, rules)
                 for action in (actions or []):
                     wait_for_action(self._client, action)
-                log.api(
-                    provider="hetzner",
-                    method="POST",
-                    path=f"/firewalls/{firewall.id}/actions/set_rules",
-                    status_code=200,
-                    resource_id=str(firewall.id),
-                )
-            except hcloud.APIException as exc:
-                log.api(
-                    provider="hetzner",
-                    method="POST",
-                    path=f"/firewalls/{firewall.id}/actions/set_rules",
-                    status_code=api_status(exc),
-                )
-                raise translate(exc) from exc
-            except HetznerError:
-                raise
-            except Exception as exc:
-                log.api(
-                    provider="hetzner",
-                    method="POST",
-                    path=f"/firewalls/{firewall.id}/actions/set_rules",
-                    status_code=0,
-                )
-                raise translate(exc) from exc
+
+            self._call(
+                "POST", f"/firewalls/{firewall.id}/actions/set_rules",
+                _set_rules,
+                resource_id=str(firewall.id),
+            )
 
         # Apply to servers if requested
         if apply_to:
@@ -167,42 +127,27 @@ class _Firewalls:
                         f"Server not found for firewall apply_to: {server_name}"
                     )
                 resources.append(FirewallResource(type="server", server=server))
-            try:
+
+            def _apply() -> None:
                 apply_actions = self._client.firewalls.apply_to_resources(
                     firewall, resources
                 )
                 for action in (apply_actions or []):
                     wait_for_action(self._client, action)
-                log.api(
-                    provider="hetzner",
-                    method="POST",
-                    path=f"/firewalls/{firewall.id}/actions/apply_to_resources",
-                    status_code=200,
-                    resource_id=str(firewall.id),
-                )
-            except hcloud.APIException as exc:
-                log.api(
-                    provider="hetzner",
-                    method="POST",
-                    path=f"/firewalls/{firewall.id}/actions/apply_to_resources",
-                    status_code=api_status(exc),
-                )
-                raise translate(exc) from exc
-            except HetznerError:
-                raise
-            except Exception as exc:
-                log.api(
-                    provider="hetzner",
-                    method="POST",
-                    path=f"/firewalls/{firewall.id}/actions/apply_to_resources",
-                    status_code=0,
-                )
-                raise translate(exc) from exc
+
+            self._call(
+                "POST", f"/firewalls/{firewall.id}/actions/apply_to_resources",
+                _apply,
+                resource_id=str(firewall.id),
+            )
 
         return firewall
 
     def get(self, name: str) -> Firewall | None:
         """Return the named firewall, or None if not found.
+
+        Internal probe used by ensure. Does not emit a log event so the
+        outer method controls exactly one log entry per public operation.
 
         Args:
             name: Firewall name.
@@ -236,36 +181,10 @@ class _Firewalls:
         """
         existing = self.get(name)
         if existing is None:
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/firewalls",
-                status_code=404,
-            )
             return False
-        try:
-            self._client.firewalls.delete(existing)
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/firewalls",
-                status_code=204,
-                resource_id=str(existing.id),
-            )
-            return True
-        except hcloud.APIException as exc:
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/firewalls",
-                status_code=api_status(exc),
-            )
-            raise translate(exc) from exc
-        except Exception as exc:
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/firewalls",
-                status_code=0,
-            )
-            raise translate(exc) from exc
+        self._call(
+            "DELETE", "/firewalls",
+            lambda: self._client.firewalls.delete(existing),
+            resource_id=str(existing.id),
+        )
+        return True

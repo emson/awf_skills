@@ -7,7 +7,7 @@ References:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import hcloud
 from hcloud import Client
@@ -17,9 +17,8 @@ from hcloud.server_types import ServerType
 from hcloud.servers import Server
 from hcloud.ssh_keys import SSHKey
 
-from lib import log
-from lib.hetzner.errors import HetznerError, HetznerNotFound, api_status, translate
-from lib.hetzner.client import wait_for_action
+from lib.hetzner.errors import HetznerNotFound, translate
+from lib.hetzner.actions import wait_for_action
 
 if TYPE_CHECKING:
     from lib.hetzner.resources.ssh_keys import _SSHKeys
@@ -32,10 +31,12 @@ class _Servers:
     def __init__(
         self,
         client: Client,
+        caller: Callable[..., object],
         ssh_keys_ns: "_SSHKeys",
         networks_ns: "_Networks",
     ) -> None:
         self._client = client
+        self._call = caller
         self._ssh_keys_ns = ssh_keys_ns
         self._networks_ns = networks_ns
 
@@ -82,14 +83,11 @@ class _Servers:
         """
         existing = self.get(name)
         if existing is not None:
-            log.api(
-                provider="hetzner",
-                method="GET",
-                path="/servers",
-                status_code=200,
+            return self._call(  # type: ignore[return-value]
+                "GET", "/servers",
+                lambda: existing,
                 resource_id=str(existing.id),
             )
-            return existing
 
         # Resolve server type
         server_type_obj: ServerType | None = self._client.server_types.get_by_name(type)
@@ -122,7 +120,7 @@ class _Servers:
                 raise HetznerNotFound(f"Network not found: {network}")
             network_objs.append(net)
 
-        try:
+        def _create() -> Server:
             response = self._client.servers.create(
                 name=name,
                 server_type=server_type_obj,
@@ -133,39 +131,20 @@ class _Servers:
                 labels=labels or {},
                 user_data=user_data,
             )
-            # Poll any next_actions to terminal state
             for action in (response.next_actions or []):
                 wait_for_action(self._client, action)
-
-            log.api(
-                provider="hetzner",
-                method="POST",
-                path="/servers",
-                status_code=201,
-                resource_id=str(response.server.id),
-            )
             return response.server
-        except hcloud.APIException as exc:
-            log.api(
-                provider="hetzner",
-                method="POST",
-                path="/servers",
-                status_code=api_status(exc),
-            )
-            raise translate(exc) from exc
-        except HetznerError:
-            raise
-        except Exception as exc:
-            log.api(
-                provider="hetzner",
-                method="POST",
-                path="/servers",
-                status_code=0,
-            )
-            raise translate(exc) from exc
+
+        return self._call(  # type: ignore[return-value]
+            "POST", "/servers",
+            _create,
+        )
 
     def get(self, name: str) -> Server | None:
         """Return the named server, or None if not found.
+
+        Internal probe used by get_or_create. Does not emit a log event so
+        the outer method controls exactly one log entry per public operation.
 
         Args:
             name: Server name.
@@ -199,36 +178,10 @@ class _Servers:
         """
         existing = self.get(name)
         if existing is None:
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/servers",
-                status_code=404,
-            )
             return False
-        try:
-            self._client.servers.delete(existing)
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/servers",
-                status_code=204,
-                resource_id=str(existing.id),
-            )
-            return True
-        except hcloud.APIException as exc:
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/servers",
-                status_code=api_status(exc),
-            )
-            raise translate(exc) from exc
-        except Exception as exc:
-            log.api(
-                provider="hetzner",
-                method="DELETE",
-                path="/servers",
-                status_code=0,
-            )
-            raise translate(exc) from exc
+        self._call(
+            "DELETE", "/servers",
+            lambda: self._client.servers.delete(existing),
+            resource_id=str(existing.id),
+        )
+        return True

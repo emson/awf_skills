@@ -7,26 +7,30 @@ References:
 
 from __future__ import annotations
 
+from typing import Callable, TypeVar
+
 import hcloud
 from hcloud import Client
 from hcloud.ssh_keys import SSHKey
 
-from lib import log
-from lib.hetzner.errors import api_status, translate
+from lib.hetzner.errors import translate
+
+T = TypeVar("T")
 
 
 class _SSHKeys:
     """Manage Hetzner SSH keys with search-or-create semantics."""
 
-    def __init__(self, client: Client) -> None:
+    def __init__(self, client: Client, caller: Callable[..., object]) -> None:
         self._client = client
+        self._call = caller
 
     def get_or_create(self, name: str, *, public_key: str) -> SSHKey:
         """Return the named SSH key, creating it if absent.
 
         Idempotency: if a key with ``name`` already exists, it is returned
         immediately with no create call. Logs a single ``api.call`` event
-        with ``result=ok`` and the existing ``resource_id``.
+        with the existing ``resource_id``.
 
         Args:
             name: Key name (unique within the Hetzner project).
@@ -42,48 +46,21 @@ class _SSHKeys:
         """
         existing = self.get(name)
         if existing is not None:
-            log.api(
-                provider="hetzner",
-                method="GET",
-                path="/ssh-keys",
-                status_code=200,
+            return self._call(  # type: ignore[return-value]
+                "GET", "/ssh-keys",
+                lambda: existing,
                 resource_id=str(existing.id),
             )
-            return existing
-        # Key absent — create it
-        try:
-            result = self._client.ssh_keys.create(name=name, public_key=public_key)
-            log.api(
-                provider="hetzner",
-                method="POST",
-                path="/ssh-keys",
-                status_code=201,
-                resource_id=str(result.id),
-            )
-            return result
-        except hcloud.APIException as exc:
-            log.api(
-                provider="hetzner",
-                method="POST",
-                path="/ssh-keys",
-                status_code=api_status(exc),
-            )
-            raise translate(exc) from exc
-        except Exception as exc:
-            log.api(
-                provider="hetzner",
-                method="POST",
-                path="/ssh-keys",
-                status_code=0,
-            )
-            raise translate(exc) from exc
+        return self._call(  # type: ignore[return-value]
+            "POST", "/ssh-keys",
+            lambda: self._client.ssh_keys.create(name=name, public_key=public_key),
+        )
 
     def get(self, name: str) -> SSHKey | None:
         """Return the named SSH key, or None if not found.
 
-        Logs no ``api.call`` event — callers inside this namespace use
-        get() as a pre-flight check; the outer method logs the final
-        outcome.
+        Internal probe used by get_or_create. Does not emit a log event so
+        the outer method controls exactly one log entry per public operation.
 
         Args:
             name: Key name.
@@ -92,8 +69,7 @@ class _SSHKeys:
             SSHKey or None.
         """
         try:
-            result = self._client.ssh_keys.get_by_name(name)
-            return result
+            return self._client.ssh_keys.get_by_name(name)
         except hcloud.APIException as exc:
             raise translate(exc) from exc
         except Exception as exc:

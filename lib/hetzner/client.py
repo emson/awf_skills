@@ -7,81 +7,15 @@ References:
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Callable, TypeVar
 
-import hcloud
 from hcloud import Client
 
-from lib import log
-from lib.hetzner.errors import (
-    HetznerError,
-    HetznerNetworkError,
-    api_status,
-    translate,
-)
-
-# ---------------------------------------------------------------------------
-# Types
-# ---------------------------------------------------------------------------
+from lib.hetzner.actions import sdk_call
 
 T = TypeVar("T")
-
-# ---------------------------------------------------------------------------
-# Action polling helper (internal only)
-# ---------------------------------------------------------------------------
-
-_ACTION_POLL_INTERVAL = 2   # seconds between status checks
-_ACTION_TIMEOUT = 300       # seconds before giving up
-
-
-def wait_for_action(client: Client, action: Any, timeout: int = _ACTION_TIMEOUT) -> None:
-    """Poll ``action`` until it reaches terminal state.
-
-    Raises HetznerError if the action fails or times out. This is an
-    internal helper; composers own readiness policy for higher-level
-    concerns like "server is fully booted".
-
-    Args:
-        client: The hcloud Client.
-        action: An hcloud Action object (must have .id and .status).
-        timeout: Seconds to wait before raising HetznerNetworkError.
-
-    Raises:
-        HetznerError: If the action errors out.
-        HetznerNetworkError: If the action does not complete within ``timeout``.
-    """
-    start = time.monotonic()
-    while True:
-        refreshed = client.actions.get_by_id(action.id)
-        if refreshed.status == "success":
-            return
-        if refreshed.status == "error":
-            raise HetznerError(
-                f"Action {action.id} failed: {refreshed.error}",
-                code="action_failed",
-                retryable=False,
-            )
-        if time.monotonic() - start > timeout:
-            raise HetznerNetworkError(
-                f"Action {action.id} timed out after {timeout}s"
-            )
-        time.sleep(_ACTION_POLL_INTERVAL)
-
-
-# ---------------------------------------------------------------------------
-# Private utility
-# ---------------------------------------------------------------------------
-
-
-def _extract_id(obj: Any) -> str | None:
-    """Return ``str(obj.id)`` if obj has an ``id`` attribute, else None."""
-    try:
-        return str(obj.id)
-    except AttributeError:
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -135,11 +69,13 @@ class HetznerClient:
             token=config.api_token,
             application_name=config.app_name,
         )
-        self.ssh_keys = _SSHKeys(self._client)
-        self.networks = _Networks(self._client)
-        self.servers = _Servers(self._client, self.ssh_keys, self.networks)
-        self.firewalls = _Firewalls(self._client, self.servers.get)
-        self.lb = _LoadBalancers(self._client, self.servers.get)
+        # Pass self._call so every resource routes SDK calls through the
+        # single log-emit + exception-translate codepath.
+        self.ssh_keys = _SSHKeys(self._client, self._call)
+        self.networks = _Networks(self._client, self._call)
+        self.servers = _Servers(self._client, self._call, self.ssh_keys, self.networks)
+        self.firewalls = _Firewalls(self._client, self._call, self.servers.get)
+        self.lb = _LoadBalancers(self._client, self._call, self.servers.get)
 
     @classmethod
     def from_env(
@@ -193,10 +129,8 @@ class HetznerClient:
     ) -> T:
         """Wrap an hcloud SDK call: emit log.api, translate exceptions.
 
-        All resource methods route through this helper to guarantee:
-        - exactly one ``api.call`` log event per SDK call
-        - consistent exception translation via errors.translate()
-        - token redaction (the token never reaches log.api directly)
+        Delegates to ``actions.sdk_call`` so all resource methods share the
+        same log-emit and exception-translate codepath.
 
         Args:
             method: HTTP method string for the log (e.g. "GET", "POST").
@@ -211,34 +145,4 @@ class HetznerClient:
         Raises:
             HetznerError subclass translated from hcloud.APIException.
         """
-        try:
-            result = fn()
-            rid = resource_id if resource_id is not None else _extract_id(result)
-            log.api(
-                provider="hetzner",
-                method=method,
-                path=path,
-                status_code=200,
-                resource_id=rid,
-            )
-            return result
-        except hcloud.APIException as e:
-            log.api(
-                provider="hetzner",
-                method=method,
-                path=path,
-                status_code=api_status(e),
-                resource_id=None,
-            )
-            raise translate(e) from e
-        except HetznerError:
-            raise
-        except Exception as e:
-            log.api(
-                provider="hetzner",
-                method=method,
-                path=path,
-                status_code=0,
-                resource_id=None,
-            )
-            raise translate(e) from e
+        return sdk_call(method, path, fn, resource_id=resource_id)
