@@ -208,8 +208,11 @@ hz.lb.get_or_create(name, targets=[...], health_check={...})
 
 **Acceptance criteria.**
 
-- [ ] All 47 tests from `hetzner_deploy/packages/provision/tests`
-      pass against the ported client (adjust import paths only).
+- [ ] Port the 25 unit tests from `hetzner_deploy` that exercise the
+      ported public API surface (search-or-create semantics, error
+      shape, logging contract). The remaining upstream tests cover
+      `ProvisioningState` / CLI / YAML config and are not in scope
+      per D-001. See plan_005 § "Test reality check".
 - [ ] Re-creating an existing server is a no-op that logs `skip`.
 - [ ] Bearer token never appears in log output.
 
