@@ -12,6 +12,11 @@ their target.
 The canonical Pydantic model lives in [`lib/passport.py`](../lib/passport.py).
 This document is the human-readable mirror.
 
+> **Note:** Multi-stage state (`.awf/project.json`, `.awf/infra.json`,
+> `~/.config/awf/shared.json`) is a separate contract defined in
+> [D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson)
+> and implemented in `lib/state.py`. The two contracts coexist per D-001 §5.
+
 ---
 
 ## Schema v1.0
