@@ -1,9 +1,9 @@
 # Plan 002 — Foundation: project locator dual-walk
 
-**Status:** ready
+**Status:** implemented
 **Phase:** A
 **Spec refs:** spec.md §A2, decisions.md D-004 (primary); D-001 §4, D-003 (context); 01-principles.md A7
-**Owner (current):** Lead
+**Owner (current):** Reviewer
 **Created:** 2026-05-31
 **Updated:** 2026-05-31
 
@@ -308,7 +308,7 @@ Numbered, fine-grained. Each step is independently verifiable.
 
 Verbatim from spec.md §A2 (the four bullets):
 
-- [ ] Legacy project (passport only): `find_anchor_state()` returns
+- [x] Legacy project (passport only): `find_anchor_state()` returns
       `(root, True)`, and `find_project_root()` returns `root`
       (plain `Path`, no structural change to its return shape).
   *Verification:* the spec's "`anchor_missing=True` on the returned
@@ -318,14 +318,14 @@ Verbatim from spec.md §A2 (the four bullets):
   `find_anchor_state(tmp_path)` returns `(tmp_path, True)` and
   `find_project_root(tmp_path) == tmp_path`.
 
-- [ ] After `ensure_anchor()`: `.awf/project.json` exists with
+- [x] After `ensure_anchor()`: `.awf/project.json` exists with
       `stage="landing"`, `has.passport=true`.
   *Verification:* Test: passport-only project; call
   `ensure_anchor(tmp_path)`; assert file exists, JSON parses,
   `stage == "landing"`, `has.passport is True`. Domain and slug
   copied verbatim from passport.
 
-- [ ] New project (both files): `.awf/project.json` is preferred.
+- [x] New project (both files): `.awf/project.json` is preferred.
   *Verification:* Test: `tmp_path` with both files; `find_anchor_state`
   returns `anchor_missing=False`; the root selected by
   `find_project_root` is the one containing both. (Preference matters
@@ -335,7 +335,7 @@ Verbatim from spec.md §A2 (the four bullets):
   wins, falling back to the closest `passport.json` only if no
   `.awf/` is found on the walk.)
 
-- [ ] No project (neither file): raises `ProjectNotFound` with
+- [x] No project (neither file): raises `ProjectNotFound` with
       message including cwd and the directories walked.
   *Verification:* Test: empty `tmp_path` (no parent within tmp has
   either file). Assert `ProjectNotFound` is raised; assert the
@@ -344,7 +344,7 @@ Verbatim from spec.md §A2 (the four bullets):
 
 Plan-specific additions:
 
-- [ ] `ensure_anchor()` is idempotent: calling it twice on the same
+- [x] `ensure_anchor()` is idempotent: calling it twice on the same
       passport-only project results in no second `state.change`
       emission, and `.awf/project.json` is byte-identical between
       the two calls. The second call is a no-op read (the
@@ -352,23 +352,23 @@ Plan-specific additions:
       `ProjectAnchor.load(start=root)` without re-creation), so the
       `created` timestamp written on the first call is preserved
       verbatim.
-- [ ] `ensure_anchor()` emits exactly one `state.change` log event on
+- [x] `ensure_anchor()` emits exactly one `state.change` log event on
       first call, via `ProjectAnchor.save()` → `_save_impl` →
       `_emit_state_change`. (Verified by spying on `lib.log.state_change`
       — the same hook plan_001's tests use.)
-- [ ] `mypy --strict lib/project.py` passes (with the new `@overload`s).
-- [ ] `mypy --strict lib/state.py` passes **without** the three
+- [x] `mypy --strict lib/project.py` passes (with the new `@overload`s).
+- [x] `mypy --strict lib/state.py` passes **without** the three
       `assert root is not None` lines (deleted in step 7).
-- [ ] All existing `lib/state.py` callers (e.g., `ProjectAnchor.load`,
+- [x] All existing `lib/state.py` callers (e.g., `ProjectAnchor.load`,
       `Infra.load`, `Infra.load_or_create`) continue to pass plan_001's
       tests unchanged. No edits to `tests/lib/test_state.py` are
       necessary or permitted.
-- [ ] All existing landing-page skill scripts that import
+- [x] All existing landing-page skill scripts that import
       `find_project_root` continue to compile. (Grep:
       `grep -rn "find_project_root" skills/` — every match still
       receives a `Path` from a single-positional call. No skill code
       edited.)
-- [ ] `docs/spec.md` lines 68 and 115 read `ProjectNotFound` (not
+- [x] `docs/spec.md` lines 68 and 115 read `ProjectNotFound` (not
       `ProjectNotFoundError`).
 
 ## Tests required
@@ -456,6 +456,7 @@ modification.
 - 2026-05-31  Reviewer — plan review pass 1: changes-requested. No blockers; one Major (inverted test name M1 would cause Dev to write wrong assertion); four Minors; all three Lead-flagged tensions accepted.
 - 2026-05-31  Lead — revised per Pass 1 feedback: M1 resolved, N1-N5 applied.
 - 2026-05-31  Reviewer — plan review pass 2: ready. All Pass 1 issues resolved; no regressions; safe for Dev to start.
+- 2026-05-31  Dev — implementation complete. Branch: feat/plan-002-foundation-project-locator. Commits a5a5595..1fe19ab. 13 tests added (test_project.py); full suite 34/34 green. Ruff clean. Mypy --strict clean. Notable: added mypy.ini with [mypy-slug] ignore_missing_imports to resolve pre-existing false-positive in lib/passport.py triggered by ensure_anchor's deferred import; added lib/ to sys.path in tests/conftest.py for the same reason at test time.
 
 ## Review
 
