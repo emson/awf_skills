@@ -16,3 +16,4 @@ token.json
 .awf/log.jsonl
 .awf/logs/
 
+.claude/worktrees/
