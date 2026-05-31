@@ -26,6 +26,8 @@ awf_skills/
 │   ├── 08-logging.md             ← per-project event log, awf-log skill
 │   ├── spec.md                   ← build-ready module spec (Phases A–E)
 │   ├── decisions.md              ← ADR log (D-001 … D-009 + open items)
+│   ├── multi_agent_prompt.md     ← Lead / Dev / Reviewer workflow
+│   ├── plans/                    ← plan_NNN_<slug>.md, written by Lead
 │   └── notes/                    ← brainstorm + exploration (SpecForge convention)
 │       └── concepts-and-priorities.md
 │
