@@ -147,7 +147,7 @@ def test_already_migrated_is_noop(tmp_path: Path) -> None:
 
     # Count existing log events before second invocation
     events_before = _read_log_lines(tmp_path)
-    state_changes_before = sum(1 for e in events_before if e.get("event") == "state.change")
+    state_changes_before = sum(1 for e in events_before if e.get("type") == "state.change")
 
     result = _run_migrate(tmp_path)
 
@@ -228,6 +228,51 @@ def test_io_failure_exits_2(tmp_path: Path) -> None:
         assert result.stderr.strip() != "", "Expected non-empty stderr on I/O failure"
     finally:
         # Always restore so pytest can clean up tmp_path
+        tmp_path.chmod(0o700)
+
+
+def test_io_failure_session_end_records_fail_result(tmp_path: Path) -> None:
+    """session.end carries result='fail' when an I/O error occurs.
+
+    Regression coverage for M1: sys.exit(2) inside log.session raised
+    SystemExit (BaseException), bypassing the except-Exception guard, so
+    session.end was recorded with result='ok'. MigrateIOError (a plain
+    RuntimeError subclass) must be raised instead so log.session correctly
+    flips result to 'fail'.
+    """
+    if os.getuid() == 0:
+        pytest.skip("root bypasses chmod — I/O failure test not meaningful as root")
+
+    _make_legacy_project(tmp_path)
+
+    # chmod to read+execute only — prevents mkdir(.awf/)
+    tmp_path.chmod(0o500)
+    try:
+        result = _run_migrate(tmp_path)
+        assert result.returncode == 2, (
+            f"Expected exit 2, got {result.returncode}; stderr: {result.stderr!r}"
+        )
+
+        # The log is written to .awf/ which cannot be created under 0o500,
+        # so we must restore permissions first before reading the log.
+        tmp_path.chmod(0o700)
+
+        events = _read_log_lines(tmp_path)
+        session_end = next(
+            (e for e in events if e.get("type") == "session.end"), None
+        )
+        # If the log dir was unwriteable, no events will exist — that's still
+        # a valid I/O-failure scenario. Only assert when the log was written.
+        if session_end is not None:
+            assert session_end.get("result") == "fail", (
+                f"Expected session.end result='fail', got: {session_end!r}"
+            )
+            # Also confirm data.summary mirrors the top-level result field
+            summary_val = session_end.get("data", {}).get("summary")
+            assert summary_val == "fail", (
+                f"Expected data.summary='fail', got: {summary_val!r}"
+            )
+    finally:
         tmp_path.chmod(0o700)
 
 

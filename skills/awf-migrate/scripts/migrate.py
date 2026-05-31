@@ -46,6 +46,14 @@ from project import (  # noqa: E402
 )
 
 
+class MigrateIOError(RuntimeError):
+    """Raised inside log.session when an I/O or unexpected error occurs.
+
+    Lets log.session see a plain Exception so it records result='fail',
+    then re-raises; main() translates to exit code 2.
+    """
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="awf-migrate",
@@ -81,36 +89,41 @@ def main() -> int:
     anchor_pre_exists: bool = (root / ".awf" / "project.json").is_file()
 
     # ── Step 3: open log session (session boundary wraps the I/O work only) ──
-    with log.session(composer="awf-migrate", target="anchor"):
-        try:
-            anchor = ensure_anchor(root)
-        except OSError as exc:
-            print(f"awf-migrate: I/O failure: {exc}", file=sys.stderr)
-            sys.exit(2)
-        except Exception as exc:  # noqa: BLE001
-            print(f"awf-migrate: migration failed: {exc}", file=sys.stderr)
-            sys.exit(2)
+    # MigrateIOError is raised *inside* the with-block so log.session sees the
+    # Exception, sets summary["result"]="fail", then re-raises. We catch it
+    # here (outside the session) and translate to exit code 2.
+    try:
+        with log.session(composer="awf-migrate", target="anchor"):
+            try:
+                anchor = ensure_anchor(root)
+            except OSError as exc:
+                raise MigrateIOError(f"I/O failure: {exc}") from exc
+            except Exception as exc:  # noqa: BLE001
+                raise MigrateIOError(f"migration failed: {exc}") from exc
+    except MigrateIOError as exc:
+        print(f"awf-migrate: {exc}", file=sys.stderr)
+        return 2
 
-        # ── Step 4: emit user-visible output ─────────────────────────────────
-        anchor_path = root / ".awf" / "project.json"
+    # ── Step 4: emit user-visible output ─────────────────────────────────
+    anchor_path = root / ".awf" / "project.json"
 
-        if as_json:
-            # domain and slug source: on no-op the anchor was loaded from
-            # .awf/project.json (carries domain/slug); on migration the anchor
-            # was just created from passport.json. Either way anchor has them.
-            action = "no-op" if anchor_pre_exists else "migrated"
-            output = {
-                "action": action,
-                "anchor_path": str(anchor_path),
-                "domain": anchor.domain,
-                "slug": anchor.slug,
-            }
-            print(jsonlib.dumps(output))
+    if as_json:
+        # domain and slug source: on no-op the anchor was loaded from
+        # .awf/project.json (carries domain/slug); on migration the anchor
+        # was just created from passport.json. Either way anchor has them.
+        action = "no-op" if anchor_pre_exists else "migrated"
+        output = {
+            "action": action,
+            "anchor_path": str(anchor_path),
+            "domain": anchor.domain,
+            "slug": anchor.slug,
+        }
+        print(jsonlib.dumps(output))
+    else:
+        if anchor_pre_exists:
+            print(f"already migrated: {anchor_path}")
         else:
-            if anchor_pre_exists:
-                print(f"already migrated: {anchor_path}")
-            else:
-                print(f"migrated: {anchor_path}")
+            print(f"migrated: {anchor_path}")
 
     return 0
 

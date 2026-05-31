@@ -1,6 +1,6 @@
 # Plan 004 — Foundation: `awf-migrate` skill
 
-**Status:** implemented
+**Status:** needs-revision
 **Phase:** A
 **Spec refs:** [`spec.md` § A4](../spec.md#a4-awf-migrate-skill-new)
 **Owner (current):** Reviewer
@@ -368,8 +368,31 @@ the `tmp_path` project.
 2. The plan says the session context manager "catches the re-raised exception, marks the session `'fail'`" — but the `ProjectNotFound` handler exits before the `with log.session` block is entered (step 4.1 exits 1 before step 4.3 opens the session). This is correct behaviour, but the prose in the "Design decision — wrap the whole run in `log.session`" section is slightly misleading when it says the session context manager catches the not-found case. Implementer should be aware that the not-found exit is deliberately *outside* the session boundary.
 3. In `--json` mode, the output schema includes `"domain"` and `"slug"` — both require `passport.json` to be readable. On a no-op run (anchor already present), the anchor itself carries `domain` and `slug`, so this is fine. Worth a comment in the code confirming the source.
 
+### Pass 1 (2026-05-31) — code review
+
+**Verified:** 74/74 tests green (`uv run --with pytest --with pydantic pytest tests/ -v`). Ruff clean (`uv tool run ruff check skills/awf-migrate/scripts/migrate.py tests/skills/test_awf_migrate.py`). Diff is exactly five files: plan, SKILL.md, migrate.py, tests/__init__.py, test_awf_migrate.py.
+
+**Plan note T2 (root-user skip):** Implemented correctly — `test_io_failure_exits_2` opens with `if os.getuid() == 0: pytest.skip(...)`. Plan note 1 (parents[3] depth): verified correct in code (comments in script confirm the path depth). Plan note 2 (ProjectNotFound outside session): `find_project_root()` call is before the `with log.session` block; code is correct, comment on line 63–64 explicitly documents this. Plan note 3 (domain/slug source on no-op): comment on lines 98–100 confirms the source.
+
+**M1 — `sys.exit(2)` inside `with log.session` silently logs success on I/O failure (Major).** `log.session`'s except clause catches `Exception` (line 412 of `log.py`), not `BaseException`. `sys.exit(2)` raises `SystemExit`, a `BaseException` subclass, so `summary["result"]` is never set to `"fail"`. The `finally` block runs and emits `session.end` with `result="ok"` even when the migration crashed with an I/O error. Fix: raise a plain `Exception` (or a custom `MigrationError`) inside the `with` block instead of calling `sys.exit()`, catch it at the outermost level of `main()`, and return the exit code from there. Alternatively wrap the `sys.exit` calls with a `summary["result"] = "fail"` line before each, though the re-raise approach is cleaner and matches the `log.session` contract.
+
+**M2 — `e.get("event")` field-name typo in `test_already_migrated_is_noop` baseline (Major — test incorrectly verifies spec AC1).** Line 150 computes `state_changes_before` using `e.get("event") == "state.change"`. Every event record in `log.py` uses the key `"type"`, never `"event"`, so this expression always evaluates to `False` and `state_changes_before` is always `0`. The assertion on line 165 (`state_changes_after == state_changes_before`) reduces to `state_changes_after == 0`, which passes — but only because the no-op happens to emit zero new `state.change` events. The baseline count is meaningless; if the first `_make_migrated_project` call produced `state.change` events (which it does, via `ensure_anchor`), they are not counted. The test is verifying spec AC1 by accident, not by design. Fix: change line 150 to `e.get("type") == "state.change"` (matching every other usage in the file).
+
+**Checklist results:**
+- Acceptance criteria coverage: all seven ACs have verifying tests. M2 weakens AC1 verification but does not eliminate it.
+- A1 idempotency: `ensure_anchor` idempotency preserved at the process boundary. Pre-call probe is correctly placed. No-op path confirmed.
+- A11 resumability: session.start + session.end emitted on every invocation; confirmed by `test_session_event_carries_composer_and_target`. M1 means the `session.end` `result` field is incorrect on I/O failure, but the session boundary itself is always written.
+- `--json` mode: both no-op (`test_json_flag_noop_emits_no_op_action`) and migrated (`test_json_flag_emits_structured_output`) cases are tested and green.
+- Three plan Pass-1 notes: all addressed in code (parents[3], ProjectNotFound boundary, domain/slug comment).
+- `log.session` wrapping: present and correct for the happy path; broken for the I/O failure path (M1).
+- `state.change` emission: emitted by `ProjectAnchor.save()` inside `ensure_anchor`; not duplicated in the skill script. Correct.
+
+**Verdict: not accepted.** Two Majors block acceptance. Both are small, surgical fixes.
+
 ## Status log
 
 - 2026-05-31  Lead — created (draft).
 - 2026-05-31  Reviewer — pass 1 complete; accepted.
 - 2026-05-31  Dev — implemented: SKILL.md, scripts/migrate.py, tests/skills/test_awf_migrate.py. 74/74 tests green, ruff clean. `parents[3]` verified correct for repo root depth. ProjectNotFound exits before log.session opens (deliberately outside session boundary per plan prose). --json no-op sources domain/slug from anchor (comment in code). pytest.skip guard added for root user in I/O failure test.
+- 2026-05-31  Reviewer — code review pass 1: not accepted. Two Majors: sys.exit(2) inside log.session emits session.end result="ok" on I/O failure (M1); e.get("event") typo in test baseline means AC1 is verified by accident not by design (M2).
+- 2026-05-31  Dev — addressed code review pass 1: M1 (session-aware error path) replaced sys.exit(2) inside with-block with MigrateIOError raised inside log.session, caught outside; M2 (typo) fixed e.get("event") to e.get("type"). New test test_io_failure_session_end_records_fail_result verifies session.end.result=="fail" on I/O failure. 75 tests; all green.
