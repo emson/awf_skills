@@ -1,6 +1,6 @@
 # Plan 005 — S3 enabler: `lib/hetzner.py` (port from `hetzner_deploy`)
 
-**Status:** changes requested (pass 3)
+**Status:** accepted
 **Phase:** B
 **Spec refs:** [`spec.md` § B1](../spec.md#b1-libhetznerpy-port-from-hetzner_deploy), [`decisions.md` D-001](../decisions.md#d-001--multi-stage-architecture-pattern), [`decisions.md` D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson), [`01-principles.md` A1/A5](../01-principles.md)
 **Owner (current):** Reviewer
@@ -710,6 +710,60 @@ All 9 files are under 200 lines (max 190). Ruff and mypy are clean. Tests 100/10
 
 ---
 
+### Pass 4 (2026-06-01) — code review
+
+**Reviewer:** Reviewer agent
+**Verdict:** accepted
+
+**Commands run:**
+
+```
+grep -nE "self\._client\." lib/hetzner/resources/*.py
+  → 22 matches — ALL inside lambda: or named inner def (_create_fw, _create, _set_rules,
+    _apply) that are passed directly to self._call(). Zero bare call sites.
+
+uv run --with pytest --with pydantic --with hcloud pytest tests/ -v
+  → 100/100 green (1.34s)
+
+uv run --with ruff ruff check lib/hetzner/
+  → All checks passed
+
+uv run --with mypy --with hcloud --with pydantic mypy --strict lib/hetzner/
+  → 1 error: lib/state.py:113 unused-ignore (pre-existing, outside this PR's scope);
+    lib/hetzner/ itself: clean
+
+wc -l lib/hetzner/resources/*.py lib/hetzner/*.py
+  → __init__.py 1, firewalls.py 187, lb.py 170, networks.py 115, servers.py 194,
+    ssh_keys.py 69 (resources); actions.py 147, client.py 148, errors.py 132,
+    __init__.py 85 (package root); all under 200.
+```
+
+---
+
+**M4 claim verified.** The Dev's assertion — "all 5 `get_by_name` lookup methods now route through `self._call`; zero direct SDK call sites remain in `resources/`" — is correct. The `self._client.*` references that remain in `resources/` are exclusively inside function bodies (`lambda:` expressions or named `def _create_*() / def _set_rules() / def _apply()` inner functions) that are passed as the `fn` argument to `self._call(...)`. In every case the surrounding line is a `self._call("POST/GET", "...", _create_or_lambda)` invocation — the SDK is never called outside the closure. The 5 inline try/except blocks that Pass 3 flagged are gone.
+
+**File sizes** all comply: the largest file is `servers.py` at 194 lines, within the 200-line limit.
+
+**Tooling** is fully clean: ruff passes, mypy is clean for the `lib/hetzner/` scope (the one mypy error is the pre-existing `lib/state.py:113` unused-ignore, unchanged from Pass 2 and outside this PR's scope).
+
+**All acceptance criteria met.** The four-pass journey (monolith split → `_call` on HetznerClient → resource classes wired to `_call` → `get_by_name` + catalog lookups converted to lambdas) is complete. No outstanding issues.
+
+---
+
+**Checklist results (pass 4):**
+
+| Item | Result |
+|------|--------|
+| 100/100 tests pass | Pass |
+| ruff clean | Pass |
+| mypy clean (hetzner/ scope) | Pass |
+| All files <200 lines | Pass — max 194 lines (servers.py) |
+| All SDK calls inside lambda/named-def passed to `self._call` | Pass — verified by grep |
+| Zero bare `self._client.*` outside closures in resources/ | Pass |
+| No inline try/except + log.api in resource files | Pass |
+
+---
+
 ## Status log
 
 | Date | Status | Actor | Note |
@@ -724,3 +778,4 @@ All 9 files are under 200 lines (max 190). Ruff and mypy are clean. Tests 100/10
 | 2026-06-01 | implemented (pass 2 rework) | Dev | Addressed code review pass 2: M3 (all resource classes now receive `caller` bound method at construction and route every SDK call through it — 18 direct SDK call sites collapsed); extracted `wait_for_action` + `sdk_call` free function to `lib/hetzner/actions.py`; all files ≤190 lines; 25/25 tests green; full suite 100/100; ruff + mypy --strict clean. |
 | 2026-06-01 | changes requested | Reviewer | Pass 3 code review: 1 Major — 5 `get_by_name` lookup methods (one per resource namespace) still bypass `self._call` with inline try/except + direct `self._client` calls (21 direct call sites remain). Infrastructure already supports the fix; mechanical change only. |
 | 2026-06-01 | implemented (pass 3 rework) | Dev | Addressed code review pass 3: M4 (5 `get` methods now route through `self._call` via lambda — naked try/except blocks deleted; catalog lookups in `servers.py` and `lb.py` also converted to `_call` lambdas; unused `hcloud`/`translate` imports removed). Zero bare direct SDK call sites remain outside lambdas/nested-defs passed to `_call`. Tests updated to reflect probe + operation log event pairs. 100/100 tests green; ruff + mypy --strict clean (pre-existing `lib/state.py` unused-ignore excluded). |
+| 2026-06-01 | accepted | Reviewer | Pass 4 code review: M4 verified — all `self._client.*` references in resources/ are inside closures passed to `self._call`; zero bare call sites; ruff clean; mypy clean (hetzner/ scope); 100/100 tests; all files ≤194 lines. No outstanding issues. |

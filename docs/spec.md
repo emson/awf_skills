@@ -193,7 +193,7 @@ copy the code, keep the tests.
 from lib.hetzner import HetznerClient
 hz = HetznerClient.from_env()
 
-server = hz.servers.get_or_create(name, type="cx22", image="docker-ce",
+server = hz.servers.get_or_create(name, type="cx22", image="ubuntu-24.04",
                                    ssh_keys=[...])
 hz.firewalls.ensure(name, rules=[...])
 hz.lb.get_or_create(name, targets=[...], health_check={...})
