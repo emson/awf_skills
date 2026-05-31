@@ -1,0 +1,1 @@
+# Resource namespace sub-package.
