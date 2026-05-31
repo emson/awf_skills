@@ -50,5 +50,15 @@ def find_awf_home(start: Path | None = None) -> Path:
     )
 
 
+def user_config_dir() -> Path:
+    """The awf-skills user-scope config directory: ~/.config/awf.
+
+    Exists for cross-project state (D-001 / D-003). Layered
+    credential config is separate (lib.config); this is purely a
+    path helper.
+    """
+    return Path.home() / ".config" / "awf"
+
+
 if __name__ == "__main__":
     print(find_awf_home())
