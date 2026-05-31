@@ -1,6 +1,6 @@
 # Plan 004 — Foundation: `awf-migrate` skill
 
-**Status:** needs-revision
+**Status:** accepted
 **Phase:** A
 **Spec refs:** [`spec.md` § A4](../spec.md#a4-awf-migrate-skill-new)
 **Owner (current):** Reviewer
@@ -389,6 +389,18 @@ the `tmp_path` project.
 
 **Verdict: not accepted.** Two Majors block acceptance. Both are small, surgical fixes.
 
+### Pass 2 (2026-05-31) — code review
+
+**Verified:** 75/75 tests green (`uv run --with pytest --with pydantic pytest tests/ -v`). Diff covers exactly two files beyond the plan itself: `skills/awf-migrate/scripts/migrate.py` and `tests/skills/test_awf_migrate.py`.
+
+**M1 fixed.** `MigrateIOError(RuntimeError)` is now raised inside the `with log.session` block; the outer `try/except MigrateIOError` catches the re-raise and returns exit code 2. `log.session`'s `except Exception` guard fires correctly, setting `result="fail"` on `session.end`. New regression test `test_io_failure_session_end_records_fail_result` explicitly asserts `session.end.result == "fail"` and `data.summary == "fail"` (with a correct guard for the case where the log dir itself is unwriteable — valid edge, not a gap). Test passes.
+
+**M2 fixed.** All `e.get("event")` references are now `e.get("type")` throughout the test file (grep confirms zero occurrences of `"event"` as a key lookup). `test_already_migrated_is_noop` line 150 now correctly counts pre-existing `state.change` events by `"type"`, making the AC1 no-new-state.change assertion meaningful rather than accidental.
+
+**No new issues.** Code is clean: `MigrateIOError` docstring precisely explains the contract; output block moved outside the session (correct — no I/O work after `ensure_anchor` returns); `--json` no-op path still reachable since `anchor` is in scope when `MigrateIOError` is not raised; `return 0` outside the `try` block is unreachable after `return 2` on error, which is correct. No ruff or structural issues observed.
+
+**Verdict: accepted.**
+
 ## Status log
 
 - 2026-05-31  Lead — created (draft).
@@ -396,3 +408,4 @@ the `tmp_path` project.
 - 2026-05-31  Dev — implemented: SKILL.md, scripts/migrate.py, tests/skills/test_awf_migrate.py. 74/74 tests green, ruff clean. `parents[3]` verified correct for repo root depth. ProjectNotFound exits before log.session opens (deliberately outside session boundary per plan prose). --json no-op sources domain/slug from anchor (comment in code). pytest.skip guard added for root user in I/O failure test.
 - 2026-05-31  Reviewer — code review pass 1: not accepted. Two Majors: sys.exit(2) inside log.session emits session.end result="ok" on I/O failure (M1); e.get("event") typo in test baseline means AC1 is verified by accident not by design (M2).
 - 2026-05-31  Dev — addressed code review pass 1: M1 (session-aware error path) replaced sys.exit(2) inside with-block with MigrateIOError raised inside log.session, caught outside; M2 (typo) fixed e.get("event") to e.get("type"). New test test_io_failure_session_end_records_fail_result verifies session.end.result=="fail" on I/O failure. 75 tests; all green.
+- 2026-05-31  Reviewer — code review pass 2: accepted. M1 and M2 both correctly fixed; 75/75 tests green; no new issues.
