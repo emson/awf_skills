@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{site_name}}</title>
+  <meta name="description" content="{{site_description}}">
+  <link rel="canonical" href="{{site_url}}">
+
+  <meta property="og:title" content="{{site_name}}">
+  <meta property="og:description" content="{{site_description}}">
+  <meta property="og:url" content="{{site_url}}">
+  <meta property="og:type" content="website">
+
+  <script src="https://cdn.usefathom.com/script.js" data-site="{{fathom_site_id}}" defer></script>
+
+  <style>
+    :root { color-scheme: light dark; }
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font: 18px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 3rem 1.25rem 4rem;
+      color: #1a1a1a;
+      background: #fff;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { color: #e8e8e8; background: #111; }
+    }
+
+    .hero { margin-bottom: 3rem; }
+    h1 {
+      font-size: clamp(2rem, 5vw, 2.8rem);
+      line-height: 1.15;
+      margin: 0 0 0.5rem;
+      letter-spacing: -0.02em;
+    }
+    .subtitle { font-size: 1.2rem; color: #555; margin: 0; }
+    @media (prefers-color-scheme: dark) { .subtitle { color: #aaa; } }
+
+    .faqs { margin-bottom: 3rem; }
+    .faqs h2 {
+      margin: 0 0 1rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #888;
+    }
+    details {
+      border-top: 1px solid #e0e0e0;
+      padding: 0.75rem 0;
+    }
+    details:last-child { border-bottom: 1px solid #e0e0e0; }
+    @media (prefers-color-scheme: dark) {
+      details, details:last-child { border-color: #2e2e2e; }
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 600;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 1rem;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::after {
+      content: '+';
+      font-size: 1.1rem;
+      font-weight: 300;
+      color: #999;
+      flex-shrink: 0;
+    }
+    details[open] summary::after { content: '−'; }
+    details p { margin: 0.6rem 0 0.25rem; color: #444; font-size: 0.95rem; line-height: 1.55; }
+    @media (prefers-color-scheme: dark) { details p { color: #bbb; } }
+
+    footer {
+      border-top: 1px solid #e0e0e0;
+      padding-top: 1.5rem;
+      font-size: 0.85rem;
+      color: #999;
+    }
+    @media (prefers-color-scheme: dark) { footer { border-color: #2e2e2e; } }
+    footer a { color: inherit; }
+  </style>
+</head>
+<body>
+  <section class="hero">
+    <h1>{{site_hero}}</h1>
+    <p class="subtitle">{{site_subtitle}}</p>
+  </section>
+
+  <section class="faqs">
+    <h2>Frequently Asked Questions</h2>
+    {{faqs}}
+  </section>
+
+  <footer>
+    <p>&copy; {{year}} {{site_name}} &mdash; <a href="mailto:{{email}}">{{email}}</a></p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{
+  "name": "landing-page",
+  "version": "0.1",
+  "passport_schema": "1.0",
+  "description": "Bare-minimum static-HTML landing page for end-to-end testing of the awf-skills pipeline. Substitutes passport.json values with naive {{var}} replacement. No client-side framework; no build step beyond a 40-line copy script. To be replaced by a real SvelteKit template (v1) once the skills are validated."
+}

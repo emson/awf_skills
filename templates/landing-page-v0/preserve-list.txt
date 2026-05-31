@@ -1,0 +1,10 @@
+# Files / globs to preserve when awf-update-template re-overlays
+# a newer template version onto an existing project.
+#
+# One entry per line. Blank lines and `#` comments ignored.
+# `**` is supported (matched as a wildcard).
+passport.json
+# IndexNow keys live as `static/<key>.txt`. Preserve all .txt files
+# under static/ to avoid clobbering them on template upgrades. This
+# also incidentally preserves a hand-edited robots.txt.
+static/*.txt
