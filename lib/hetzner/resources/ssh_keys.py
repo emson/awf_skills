@@ -7,15 +7,10 @@ References:
 
 from __future__ import annotations
 
-from typing import Callable, TypeVar
+from typing import Callable
 
-import hcloud
 from hcloud import Client
 from hcloud.ssh_keys import SSHKey
-
-from lib.hetzner.errors import translate
-
-T = TypeVar("T")
 
 
 class _SSHKeys:
@@ -68,9 +63,7 @@ class _SSHKeys:
         Returns:
             SSHKey or None.
         """
-        try:
-            return self._client.ssh_keys.get_by_name(name)
-        except hcloud.APIException as exc:
-            raise translate(exc) from exc
-        except Exception as exc:
-            raise translate(exc) from exc
+        return self._call(  # type: ignore[return-value]
+            "GET", f"/ssh-keys?name={name}",
+            lambda: self._client.ssh_keys.get_by_name(name),
+        )

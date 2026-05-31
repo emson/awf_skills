@@ -9,15 +9,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable
 
-import hcloud
 from hcloud import Client
+from hcloud.images import Image
 from hcloud.locations import Location
 from hcloud.networks import Network
 from hcloud.server_types import ServerType
 from hcloud.servers import Server
 from hcloud.ssh_keys import SSHKey
 
-from lib.hetzner.errors import HetznerNotFound, translate
+from lib.hetzner.errors import HetznerNotFound
 from lib.hetzner.actions import wait_for_action
 
 if TYPE_CHECKING:
@@ -90,17 +90,26 @@ class _Servers:
             )
 
         # Resolve server type
-        server_type_obj: ServerType | None = self._client.server_types.get_by_name(type)
+        server_type_obj: ServerType | None = self._call(  # type: ignore[assignment]
+            "GET", f"/server_types?name={type}",
+            lambda: self._client.server_types.get_by_name(type),
+        )
         if server_type_obj is None:
             raise HetznerNotFound(f"Server type not found: {type}")
 
         # Resolve image
-        image_obj = self._client.images.get_by_name(image)
+        image_obj: Image | None = self._call(  # type: ignore[assignment]
+            "GET", f"/images?name={image}",
+            lambda: self._client.images.get_by_name(image),
+        )
         if image_obj is None:
             raise HetznerNotFound(f"Image not found: {image}")
 
         # Resolve location
-        location_obj: Location | None = self._client.locations.get_by_name(location)
+        location_obj: Location | None = self._call(  # type: ignore[assignment]
+            "GET", f"/locations?name={location}",
+            lambda: self._client.locations.get_by_name(location),
+        )
         if location_obj is None:
             raise HetznerNotFound(f"Location not found: {location}")
 
@@ -152,12 +161,10 @@ class _Servers:
         Returns:
             Server or None.
         """
-        try:
-            return self._client.servers.get_by_name(name)
-        except hcloud.APIException as exc:
-            raise translate(exc) from exc
-        except Exception as exc:
-            raise translate(exc) from exc
+        return self._call(  # type: ignore[return-value]
+            "GET", f"/servers?name={name}",
+            lambda: self._client.servers.get_by_name(name),
+        )
 
     def delete(self, name: str) -> bool:
         """Delete the named server.

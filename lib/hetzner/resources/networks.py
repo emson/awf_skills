@@ -9,11 +9,9 @@ from __future__ import annotations
 
 from typing import Callable
 
-import hcloud
 from hcloud import Client
 from hcloud.networks import Network, NetworkSubnet
 
-from lib.hetzner.errors import translate
 
 
 class _Networks:
@@ -84,12 +82,10 @@ class _Networks:
         Returns:
             Network or None.
         """
-        try:
-            return self._client.networks.get_by_name(name)
-        except hcloud.APIException as exc:
-            raise translate(exc) from exc
-        except Exception as exc:
-            raise translate(exc) from exc
+        return self._call(  # type: ignore[return-value]
+            "GET", f"/networks?name={name}",
+            lambda: self._client.networks.get_by_name(name),
+        )
 
     def delete(self, name: str) -> bool:
         """Delete the named network.

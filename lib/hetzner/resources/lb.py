@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-import hcloud
 from hcloud import Client
 from hcloud.load_balancer_types import LoadBalancerType
 from hcloud.load_balancers import (
@@ -20,7 +19,7 @@ from hcloud.load_balancers import (
 from hcloud.locations import Location
 from hcloud.servers import Server
 
-from lib.hetzner.errors import HetznerNotFound, translate
+from lib.hetzner.errors import HetznerNotFound
 from lib.hetzner.actions import wait_for_action
 
 
@@ -83,12 +82,18 @@ class _LoadBalancers:
             )
 
         # Resolve LB type
-        lb_type_obj: LoadBalancerType | None = self._client.load_balancer_types.get_by_name(type)
+        lb_type_obj: LoadBalancerType | None = self._call(  # type: ignore[assignment]
+            "GET", f"/load_balancer_types?name={type}",
+            lambda: self._client.load_balancer_types.get_by_name(type),
+        )
         if lb_type_obj is None:
             raise HetznerNotFound(f"Load balancer type not found: {type}")
 
         # Resolve location
-        location_obj: Location | None = self._client.locations.get_by_name(location)
+        location_obj: Location | None = self._call(  # type: ignore[assignment]
+            "GET", f"/locations?name={location}",
+            lambda: self._client.locations.get_by_name(location),
+        )
         if location_obj is None:
             raise HetznerNotFound(f"Location not found: {location}")
 
@@ -132,12 +137,10 @@ class _LoadBalancers:
         Returns:
             LoadBalancer or None.
         """
-        try:
-            return self._client.load_balancers.get_by_name(name)
-        except hcloud.APIException as exc:
-            raise translate(exc) from exc
-        except Exception as exc:
-            raise translate(exc) from exc
+        return self._call(  # type: ignore[return-value]
+            "GET", f"/load_balancers?name={name}",
+            lambda: self._client.load_balancers.get_by_name(name),
+        )
 
     def delete(self, name: str) -> bool:
         """Delete the named load balancer.

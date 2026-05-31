@@ -9,12 +9,11 @@ from __future__ import annotations
 
 from typing import Callable
 
-import hcloud
 from hcloud import Client
 from hcloud.firewalls import Firewall, FirewallResource, FirewallRule
 from hcloud.servers import Server
 
-from lib.hetzner.errors import HetznerNotFound, translate
+from lib.hetzner.errors import HetznerNotFound
 from lib.hetzner.actions import wait_for_action
 
 
@@ -155,12 +154,10 @@ class _Firewalls:
         Returns:
             Firewall or None.
         """
-        try:
-            return self._client.firewalls.get_by_name(name)
-        except hcloud.APIException as exc:
-            raise translate(exc) from exc
-        except Exception as exc:
-            raise translate(exc) from exc
+        return self._call(  # type: ignore[return-value]
+            "GET", f"/firewalls?name={name}",
+            lambda: self._client.firewalls.get_by_name(name),
+        )
 
     def delete(self, name: str) -> bool:
         """Delete the named firewall.

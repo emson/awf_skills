@@ -197,7 +197,12 @@ class TestServersGetOrCreate:
         assert result.id == 7
 
     def test_skip_emits_api_call(self, tmp_path: Path) -> None:
-        """get_or_create skip path emits exactly one api.call log event."""
+        """get_or_create skip path emits exactly two api.call log events.
+
+        The first event is the probe GET (servers.get), the second is the
+        skip GET emitted by the get_or_create early-return path.  Both are
+        GET requests so the caller still sees a coherent read-only trace.
+        """
         import lib.log as log_mod
 
         tok_root = log_mod._current_project_root.set(tmp_path)
@@ -212,9 +217,10 @@ class TestServersGetOrCreate:
 
             lines = _read_log_lines(tmp_path)
             api_lines = [ev for ev in lines if ev.get("type") == "api.call"]
-            assert len(api_lines) == 1
-            assert api_lines[0]["data"]["provider"] == "hetzner"
-            assert api_lines[0]["data"]["method"] == "GET"
+            # probe GET (servers.get) + skip GET (get_or_create early-return)
+            assert len(api_lines) == 2
+            assert all(ev["data"]["provider"] == "hetzner" for ev in api_lines)
+            assert all(ev["data"]["method"] == "GET" for ev in api_lines)
         finally:
             log_mod._current_project_root.reset(tok_root)
 
@@ -496,8 +502,12 @@ class TestNetworksGetOrCreate:
 
 
 class TestLoggingAndRedaction:
-    def test_every_successful_call_emits_one_api_call(self, tmp_path: Path) -> None:
-        """A successful get_or_create emits exactly one api.call event."""
+    def test_every_successful_call_emits_two_api_calls(self, tmp_path: Path) -> None:
+        """A successful get_or_create (create path) emits exactly two api.call events.
+
+        The first event is the probe GET (ssh_keys.get returns None), the second
+        is the POST create event that carries the resource_id.
+        """
         import lib.log as log_mod
 
         tok_root = log_mod._current_project_root.set(tmp_path)
@@ -513,15 +523,18 @@ class TestLoggingAndRedaction:
 
             lines = _read_log_lines(tmp_path)
             api_events = [line for line in lines if line.get("type") == "api.call"]
-            assert len(api_events) == 1
-            ev = api_events[0]
-            assert ev["data"]["provider"] == "hetzner"
-            assert ev["data"]["method"] == "POST"
+            # probe GET (ssh_keys.get returns None) + POST create
+            assert len(api_events) == 2
+            probe, create = api_events
+            assert probe["data"]["provider"] == "hetzner"
+            assert probe["data"]["method"] == "GET"
+            assert create["data"]["provider"] == "hetzner"
+            assert create["data"]["method"] == "POST"
             # sdk_call uses 200 for all successes (status_code is not propagated
             # from the hcloud response object; 2xx semantics are preserved in
             # the resource_id being present vs absent).
-            assert ev["data"]["status_code"] == 200
-            assert ev["data"]["resource_id"] == "10"
+            assert create["data"]["status_code"] == 200
+            assert create["data"]["resource_id"] == "10"
         finally:
             log_mod._current_project_root.reset(tok_root)
 

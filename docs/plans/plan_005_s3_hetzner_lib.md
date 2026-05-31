@@ -1,6 +1,6 @@
 # Plan 005 — S3 enabler: `lib/hetzner.py` (port from `hetzner_deploy`)
 
-**Status:** changes requested (pass 2)
+**Status:** changes requested (pass 3)
 **Phase:** B
 **Spec refs:** [`spec.md` § B1](../spec.md#b1-libhetznerpy-port-from-hetzner_deploy), [`decisions.md` D-001](../decisions.md#d-001--multi-stage-architecture-pattern), [`decisions.md` D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson), [`01-principles.md` A1/A5](../01-principles.md)
 **Owner (current):** Reviewer
@@ -663,6 +663,53 @@ Line counts: `firewalls.py` 271, `client.py` 244, `servers.py` 234, `lb.py` 215.
 
 ---
 
+### Pass 3 (2026-06-01) — code review
+
+**Reviewer:** Reviewer agent
+**Verdict:** changes requested — 1 Major. Not `accepted`.
+
+**Commands run:**
+
+```
+uv run --with pytest --with pydantic --with hcloud pytest tests/ -v  → 100/100 green
+wc -l lib/hetzner/**/*.py
+  → actions.py 147, client.py 148, errors.py 132, __init__.py 85,
+    firewalls.py 190, lb.py 167, networks.py 119, servers.py 187, ssh_keys.py 76
+    (all <200 — Minor from Pass 2 resolved)
+uv run --with ruff ruff check lib/hetzner/  → All checks passed
+uv run --with mypy mypy lib/hetzner/ --ignore-missing-imports  → Success: no issues found
+grep -c "self._client\." lib/hetzner/resources/*.py
+  → servers.py:6, lb.py:5, firewalls.py:5, networks.py:3, ssh_keys.py:2  (21 direct calls remain)
+```
+
+---
+
+**[MAJOR-1] `get_by_name` lookup methods in all five resource classes still bypass `self._call`.**
+
+M3 required "every SDK call routes through `self._call`". The Dev correctly collapsed the 18 mutation-side call sites (create, delete, apply, attach, detach). However, each resource class still contains a `get_by_name` method that calls `self._client.<resource>.get_by_name(name)` directly inside an inline `try/except hcloud.APIException … except Exception` block — the identical pattern M3 was supposed to eliminate. This is 5 inline try/except blocks (one per namespace) and 21 remaining direct `self._client.*` calls.
+
+The `sdk_call` free function in `actions.py` already supports the `None`-returning lookup case (`_extract_id` returns `None` when the result has no `.id`). The fix is mechanical: replace each inline block with `return self._call("GET", "/servers/{name}", lambda: self._client.servers.get_by_name(name))` (and equivalently for the other four namespaces). No new design needed; the infrastructure is already there.
+
+**[OBSERVATION] Line counts and tooling now fully compliant.**
+
+All 9 files are under 200 lines (max 190). Ruff and mypy are clean. Tests 100/100. The Minor from Pass 2 is fully resolved; only the Major above blocks acceptance.
+
+---
+
+**Checklist results (pass 3):**
+
+| Item | Result |
+|------|--------|
+| 100/100 tests pass | Pass |
+| ruff clean | Pass |
+| mypy clean (hetzner/ scope) | Pass |
+| All files <200 lines | Pass — max 190 lines (firewalls.py) |
+| `sdk_call` free function in actions.py | Pass — correctly centralises try/except + log.api |
+| All SDK calls route through `self._call` / `sdk_call` | **FAIL** — 5 `get_by_name` methods (one per namespace) still call `self._client` directly with inline try/except (21 direct call sites) |
+| No inline try/except + log.api in resource files | **FAIL** — same 5 blocks remain |
+
+---
+
 ## Status log
 
 | Date | Status | Actor | Note |
@@ -675,3 +722,5 @@ Line counts: `firewalls.py` 271, `client.py` 244, `servers.py` 234, `lb.py` 215.
 | 2026-05-31 | implemented (pass 1 rework) | Dev | Addressed code review pass 1: M1 (split `lib/hetzner.py` to `lib/hetzner/` package — `__init__.py`, `client.py`, `errors.py`, `resources/{ssh_keys,networks,servers,firewalls,lb}.py`); M2 (`_call` wrapper added to `HetznerClient`); dead `_extract_id` kept (now live via `_call`). All 25 tests green; full suite 100/100; ruff + mypy --strict clean. |
 | 2026-06-01 | changes requested | Reviewer | Pass 2 code review: 1 Major (`_call` wrapper exists on HetznerClient but resource classes bypass it — direct hcloud.Client calls + inline try/except remain), 1 Minor (4 files exceed 200 lines: firewalls.py 271, client.py 244, servers.py 234, lb.py 215). Blocked on Major. |
 | 2026-06-01 | implemented (pass 2 rework) | Dev | Addressed code review pass 2: M3 (all resource classes now receive `caller` bound method at construction and route every SDK call through it — 18 direct SDK call sites collapsed); extracted `wait_for_action` + `sdk_call` free function to `lib/hetzner/actions.py`; all files ≤190 lines; 25/25 tests green; full suite 100/100; ruff + mypy --strict clean. |
+| 2026-06-01 | changes requested | Reviewer | Pass 3 code review: 1 Major — 5 `get_by_name` lookup methods (one per resource namespace) still bypass `self._call` with inline try/except + direct `self._client` calls (21 direct call sites remain). Infrastructure already supports the fix; mechanical change only. |
+| 2026-06-01 | implemented (pass 3 rework) | Dev | Addressed code review pass 3: M4 (5 `get` methods now route through `self._call` via lambda — naked try/except blocks deleted; catalog lookups in `servers.py` and `lb.py` also converted to `_call` lambdas; unused `hcloud`/`translate` imports removed). Zero bare direct SDK call sites remain outside lambdas/nested-defs passed to `_call`. Tests updated to reflect probe + operation log event pairs. 100/100 tests green; ruff + mypy --strict clean (pre-existing `lib/state.py` unused-ignore excluded). |
