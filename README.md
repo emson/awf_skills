@@ -4,10 +4,15 @@ A portable suite of Claude Code skills that scaffold, configure, deploy,
 and register a small Svelte website end-to-end — from a fresh domain
 through to Bing IndexNow — usable from any directory on disk.
 
-> Status: S1 (landing page on Cloudflare Pages) is fully implemented.
-> S2–S5 — demo, MVP-play on shared Hetzner+Neon, prescale, scale —
-> are specified in [`docs/07-multi-stage-architecture.md`](docs/07-multi-stage-architecture.md)
-> and built incrementally from the same skill model.
+> **Status (Phase A complete).** S1 (landing page on Cloudflare Pages)
+> is fully implemented. The multi-stage foundation — `.awf/` state
+> schemas, dual-walk project locator, structured event logging, and
+> migration tooling — has now landed (75 tests, all green). The
+> S2–S5 stages (demo, MVP-play on shared Hetzner+Neon, prescale,
+> scale) are specified in
+> [`docs/07-multi-stage-architecture.md`](docs/07-multi-stage-architecture.md)
+> and being built incrementally per
+> [`docs/spec.md`](docs/spec.md).
 
 ---
 
@@ -61,11 +66,12 @@ cd ~/.claude/awf-skills
 
 ```
 .
-├── docs/        ← read 00-plan.md first
-├── lib/         ← shared Python (passport schema, slug, layered config, project locator)
+├── docs/        ← read 00-plan.md first; spec.md + decisions.md for the build-out
+├── lib/         ← shared Python: passport, state (.awf/ schemas), project locator, log, etc.
 ├── skills/      ← one dir per skill; SKILL.md + optional uv-script
 ├── templates/   ← versioned Svelte site templates (added separately)
-└── tests/
+├── tests/       ← pytest suite (75 tests across lib/ and skills/)
+└── .claude/agents/  ← Lead / Dev / Reviewer subagent definitions
 ```
 
 See [`docs/02-architecture.md`](docs/02-architecture.md) for the
@@ -135,3 +141,21 @@ In recommended reading order:
 | `awf-submit-bing` | Generate IndexNow key + push URLs | ✅ functional |
 | `awf-update-template` | Re-overlay newer template version | ✅ functional |
 | `awf-launch` | Orchestrator | ✓ body-only by design (composes the above) |
+| `awf-migrate` | Idempotent legacy → `.awf/`-anchor migration (Phase A) | ✅ functional |
+
+### Multi-stage foundation (Phase A complete)
+
+| Module | Purpose | Notes |
+|---|---|---|
+| `lib/state.py` | `.awf/` schemas: `ProjectAnchor`, `Infra`, `Shared` (Pydantic v2) | atomic-write, forward-compat, log-hook |
+| `lib/project.py` | Dual-walk locator: prefers `.awf/project.json`, falls back to `passport.json` | `find_anchor_state()`, `ensure_anchor()` |
+| `lib/log.py` | Structured event log (`session`/`invoke`/`api`/`state_change`/`gate`/`error`/`intent`/`note`) | ContextVar-threaded, ULID-IDed, redaction-by-denylist, best-effort writes |
+| `skills/awf-migrate` | One-shot upgrade from legacy passport-only projects | Wraps `ensure_anchor()`; session-aware |
+
+### Multi-agent build workflow
+
+Active builds use a three-role swarm — Lead (opus, planning), Dev
+(sonnet, implementation), Reviewer (sonnet, audit) — defined in
+[`docs/multi_agent_prompt.md`](docs/multi_agent_prompt.md). All work
+flows through `docs/plans/plan_NNN_<slug>.md`. See
+[`docs/decisions.md`](docs/decisions.md) for the ADR log.
