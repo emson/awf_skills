@@ -218,7 +218,6 @@ class ProjectAnchor(BaseModel):
                 f"No project root found from {start_path}: {e}"
             ) from e
 
-        assert root is not None  # find_project_root raises rather than returning None
         path = root / AWF_DIRNAME / PROJECT_FILENAME
         if not path.exists():
             raise ProjectNotFound(
@@ -383,7 +382,6 @@ class Infra(BaseModel):
                 f"No project root found from {start_path}: {e}"
             ) from e
 
-        assert root is not None  # find_project_root raises rather than returning None
         path = root / AWF_DIRNAME / INFRA_FILENAME
 
         # Let FileNotFoundError propagate — caller uses load_or_create if needed
@@ -426,7 +424,6 @@ class Infra(BaseModel):
                 f"No project root found from {start_path}: {e}"
             ) from e
 
-        assert root is not None  # find_project_root raises rather than returning None
         # Derive path before try so both branches can assign _path
         path = root / AWF_DIRNAME / INFRA_FILENAME
 
