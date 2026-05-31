@@ -1,9 +1,9 @@
 # Plan 003 — Foundation: `lib/log.py` logging library
 
-**Status:** ready
+**Status:** implemented
 **Phase:** A
 **Spec refs:** [`spec.md` § A3](../spec.md#a3-liblogpy-d-002), [`decisions.md` D-002](../decisions.md#d-002--logging-model), [`docs/08-logging.md`](../08-logging.md)
-**Owner (current):** Lead
+**Owner (current):** Reviewer
 **Created:** 2026-05-31
 **Updated:** 2026-05-31
 
@@ -569,50 +569,50 @@ flagged `[plan]`.
 
 **From `spec.md § A3`:**
 
-- [ ] 1000 concurrent appends produce 1000 valid JSON lines, no
+- [x] 1000 concurrent appends produce 1000 valid JSON lines, no
       interleaving.
-- [ ] Bearer token in `args` is redacted to `***`.
-- [ ] Read-only file → stderr warning, no exception raised.
-- [ ] Session context manager auto-emits `session.start` /
+- [x] Bearer token in `args` is redacted to `***`.
+- [x] Read-only file → stderr warning, no exception raised.
+- [x] Session context manager auto-emits `session.start` /
       `session.end` with `duration_ms`.
-- [ ] Central index gains one line per completed session.
+- [x] Central index gains one line per completed session.
 
 **Plan-specific:**
 
-- [ ] `[plan]` `state_change(file, key, before, after)` accepts the
+- [x] `[plan]` `state_change(file, key, before, after)` accepts the
       exact keyword-arg signature called by
       `lib/state.py:_emit_state_change` (regression guard: plan 001's
       21 state tests still pass with `lib.log` importable).
-- [ ] `[plan]` Session ID is threaded via `ContextVar`: a nested
+- [x] `[plan]` Session ID is threaded via `ContextVar`: a nested
       `invoke` reads the parent session's ID without the caller
       passing it; on session exit the ContextVar resets to its
       previous value (verified by token-based reset, not by overwrite).
-- [ ] `[plan]` Session IDs are 26-character Crockford base32 ULIDs.
+- [x] `[plan]` Session IDs are 26-character Crockford base32 ULIDs.
       Sortability is verified by the narrow property "two ULIDs
       generated at least 1ms apart sort with the earlier one first"
       — not by bulk concurrent ordering, which is luck-dependent.
-- [ ] `[plan]` Events ≤ 4 KB are written via `O_APPEND` (no flock);
+- [x] `[plan]` Events ≤ 4 KB are written via `O_APPEND` (no flock);
       events > 4 KB take an `fcntl.flock` exclusive lock before
       writing. Both paths emit valid JSON-lines on disk.
-- [ ] `[plan]` `safe_log` redacts: `Authorization`, `*_TOKEN`,
+- [x] `[plan]` `safe_log` redacts: `Authorization`, `*_TOKEN`,
       `*_SECRET`, `*_PASSWORD`, `*_KEY` (except `*_KEY_ID`) keys;
       bearer tokens and `sk-`/`pat-`/`hk-`/`tok-`-prefixed strings
       in any string value.
-- [ ] `[plan]` `intent` is silent (no event emitted) by default;
+- [x] `[plan]` `intent` is silent (no event emitted) by default;
       emits an event when `AWF_LOG_INTENTS=1` is set OR
       `set_dry_run(True)` is called.
-- [ ] `[plan]` `state_change` caps embedded `before`/`after` at
+- [x] `[plan]` `state_change` caps embedded `before`/`after` at
       2 KB each; oversize sides record `before_hash` /
       `before_pointer` (or after-equivalents) instead.
-- [ ] `[plan]` `error` event marks the surrounding session's
+- [x] `[plan]` `error` event marks the surrounding session's
       `result` as `"fail"` in the `session.end` summary (if a
       session is active).
-- [ ] `[plan]` `gate.hit` event increments the session's
+- [x] `[plan]` `gate.hit` event increments the session's
       `gates_hit` counter in the `session.end` summary.
-- [ ] `[plan]` Logging never raises: any `OSError` during write
+- [x] `[plan]` Logging never raises: any `OSError` during write
       becomes a single-line stderr warning; the caller's flow
       continues unaffected (verified by read-only-file test).
-- [ ] `[plan]` `mypy --strict lib/log.py` passes; `ruff check
+- [x] `[plan]` `mypy --strict lib/log.py` passes; `ruff check
       lib/log.py` passes.
 
 ## Tests required
@@ -816,6 +816,16 @@ mocks, no tautological tests.
 - 2026-05-31  Reviewer — Pass 1, changes-requested (2 blockers, 2 major, 3 minor).
 - 2026-05-31  Lead — revised per Pass 1 feedback: B1, B2, M1, M2 resolved; N1-N3 applied.
 - 2026-05-31  Reviewer — plan review pass 2: ready. All six Pass 1 issues resolved; safe for Dev.
+- 2026-05-31  Dev — implemented. Branch: feat/plan-003-foundation-logging-lib.
+  Commits: 688101e (plan baseline) → 15a58cf (implementation).
+  Tests: 33 new (test_log.py) + 34 existing = 67 total, all green.
+  Lint: ruff clean. mypy --strict lib/log.py: no issues.
+  Notable: added tests/lib/conftest.py with autouse fixture to sync
+  lib.__dict__["log"] with sys.modules["lib.log"] — necessary because the
+  existing FakeLog monkeypatches in test_state.py/test_project.py relied on
+  lib.log being absent; now that it is importable and cached on the package
+  object, the fixture removes the cached attr before each test so
+  ``from lib import log`` falls back to sys.modules (where monkeypatch operates).
 
 ## Review
 
