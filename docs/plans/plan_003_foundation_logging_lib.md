@@ -1,6 +1,6 @@
 # Plan 003 — Foundation: `lib/log.py` logging library
 
-**Status:** implemented
+**Status:** accepted
 **Phase:** A
 **Spec refs:** [`spec.md` § A3](../spec.md#a3-liblogpy-d-002), [`decisions.md` D-002](../decisions.md#d-002--logging-model), [`docs/08-logging.md`](../08-logging.md)
 **Owner (current):** Reviewer
@@ -826,6 +826,7 @@ mocks, no tautological tests.
   lib.log being absent; now that it is importable and cached on the package
   object, the fixture removes the cached attr before each test so
   ``from lib import log`` falls back to sys.modules (where monkeypatch operates).
+- 2026-05-31  Reviewer — code review Pass 1: accepted.
 
 ## Review
 
@@ -898,3 +899,17 @@ Scope and test coverage are otherwise strong: all five spec § A3 acceptance cri
 **Minor:** 0  
 
 **Verdict: ready**
+
+### Pass 1 (2026-05-31) — code review
+
+**Dev-flagged scope items:** `tests/lib/conftest.py` — necessary, correct, and the right level of infrastructure. Verified by direct Python introspection: once `lib/log.py` is imported, Python caches the module object as `lib.__dict__["log"]`; a subsequent `from lib import log` inside `_emit_state_change` resolves via that package attribute, bypassing `sys.modules["lib.log"]` where `monkeypatch.setitem` operates. Without the fixture the five existing FakeLog tests in `test_state.py` and `test_project.py` would silently exercise the real `log.state_change` rather than the fake, producing false-positive passes or noise in the project log. The fixture is a minimal, self-contained, scope-limited fix: it is `autouse=True` only inside `tests/lib/`, carries a complete explanatory docstring, handles both the "had attr" and "test left a residue" teardown branches cleanly, and correctly guards against the `lib` package not yet being in `sys.modules`. The alternative — rewriting all five call sites from `monkeypatch.setitem(sys.modules, "lib.log", fake)` to `monkeypatch.setattr(lib, "log", fake)` — would be lower-infrastructure but more invasive to accepted plans 001/002; the conftest approach is the right call for backward-compatible incremental delivery. No change requested.
+
+**Blockers:** None.
+
+**Major:** None.
+
+**Minor / nits:**
+- The `_type: ignore[attr-defined]` comment on `lib/state.py:113` (`from lib import log  # type: ignore[attr-defined]`) was necessary before `lib/log.py` existed; now that the module is present, `mypy --strict` on `lib/state.py` should resolve cleanly without the suppressor. This is not a blocking concern (the suppressor is harmless and `lib/state.py` is out of scope for this plan), but it is a follow-up nit for whichever plan next touches `lib/state.py`.
+- `_build_diff_summary` in `lib/log.py` computes the diff over the raw (unredacted) `before`/`after` dicts and reports changed key names. Key names are not secrets, so this is safe; but if a value is oversized and gets cap-replaced, the diff still computes over the original dict before capping. The behaviour is correct (the diff is computed first, then the cap is applied to the embedded payload), but the ordering is worth a one-line comment at the call site for future maintainers. Nit only; no functional concern.
+
+**Verdict:** accepted
