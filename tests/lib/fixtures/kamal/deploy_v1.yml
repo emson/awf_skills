@@ -1,0 +1,17 @@
+service: example
+image: ghcr.io/user/example
+servers:
+  web:
+    hosts:
+    - 1.2.3.4
+proxy:
+  ssl: true
+  host: example.com
+registry:
+  server: ghcr.io
+  username: user
+  password:
+  - <%= ENV["GHCR_TOKEN"] %>
+env:
+  secret:
+  - DATABASE_URL
