@@ -1,6 +1,6 @@
 # Plan 002 — Foundation: project locator dual-walk
 
-**Status:** implemented
+**Status:** accepted
 **Phase:** A
 **Spec refs:** spec.md §A2, decisions.md D-004 (primary); D-001 §4, D-003 (context); 01-principles.md A7
 **Owner (current):** Reviewer
@@ -457,6 +457,7 @@ modification.
 - 2026-05-31  Lead — revised per Pass 1 feedback: M1 resolved, N1-N5 applied.
 - 2026-05-31  Reviewer — plan review pass 2: ready. All Pass 1 issues resolved; no regressions; safe for Dev to start.
 - 2026-05-31  Dev — implementation complete. Branch: feat/plan-002-foundation-project-locator. Commits a5a5595..1fe19ab. 13 tests added (test_project.py); full suite 34/34 green. Ruff clean. Mypy --strict clean. Notable: added mypy.ini with [mypy-slug] ignore_missing_imports to resolve pre-existing false-positive in lib/passport.py triggered by ensure_anchor's deferred import; added lib/ to sys.path in tests/conftest.py for the same reason at test time.
+- 2026-05-31  Reviewer — code review pass 1: accepted. No blockers, no majors. Two minors. Scope deviations accepted.
 
 ## Review
 
@@ -519,3 +520,89 @@ modification.
 **Minor / nits:** none.
 
 **Verdict:** ready
+
+### Pass 1 (2026-05-31) — code review
+
+**Dev-flagged scope deviations:**
+
+- **`tests/conftest.py` sys.path fix: accept.** The `from slug import …`
+  in `lib/passport.py` is a pre-existing sibling-import convention that
+  requires `lib/` to be on `sys.path`. Plan_001's `test_state.py` tests
+  never imported `lib.passport`, so the gap was latent. `ensure_anchor`'s
+  deferred `from lib.passport import Passport` is the first test-time
+  trigger. Adding `lib/` to `sys.path` in `conftest.py` is the standard
+  pytest solution for intra-package sibling imports and is the minimum
+  change needed to unblock the new tests. Principle A7 (project locator)
+  is not in tension here; this is a test-harness fix for a pre-existing
+  structural gap, not a change to production code or credentials. The fix
+  is idiomatic, isolated to the test harness, and correctly guarded with
+  a duplicate-entry check. Scope-adjacent; acceptable.
+
+- **`mypy.ini` creation: accept.** The same `from slug import …` produces
+  a `Module "slug" has no attribute …` false-positive under `mypy --strict`
+  when `lib/` is not on mypy's search path. The `[mypy-slug]
+  ignore_missing_imports = True` override is the minimal, targeted fix —
+  it suppresses the single pre-existing false-positive without weakening
+  type checking on any other module. Creating `mypy.ini` is a one-time
+  configuration act; it is not business logic and does not touch any plan
+  scope boundary. The file header comment correctly documents the root
+  cause. Scope-adjacent; acceptable. Note for future plans: if a
+  `pyproject.toml` is introduced, the `[mypy]` stanza should migrate
+  there and `mypy.ini` deleted to avoid dual configuration.
+
+**Acceptance criteria mapping:**
+
+- AC1 (legacy project → `find_anchor_state` returns `(root, True)`):
+  `test_find_project_root_passport_only` ✓
+- AC2 (after `ensure_anchor`: stage=landing, has.passport=True):
+  `test_ensure_anchor_migrates_from_passport` (asserts stage, has.passport,
+  domain, slug) ✓
+- AC3 (both files: anchor preferred → anchor_missing=False):
+  `test_find_project_root_both_present` and
+  `test_find_project_root_both_files_same_dir_prefer_anchor` ✓
+- AC4 (no project → ProjectNotFound with cwd + walked dirs):
+  `test_find_project_root_neither` ✓
+- AC5 (ensure_anchor idempotent):
+  `test_ensure_anchor_idempotent_when_anchor_exists` and
+  `test_ensure_anchor_idempotent_after_migration` ✓
+- AC6 (ensure_anchor emits one state.change):
+  `test_ensure_anchor_emits_state_change_once` ✓
+- AC7 (mypy --strict lib/project.py): confirmed clean ✓
+- AC8 (mypy --strict lib/state.py without three asserts): confirmed clean ✓
+- AC9 (plan_001 tests unchanged): 21/21 test_state.py pass ✓
+- AC10 (skills find_project_root still receive Path): 14 call sites grepped
+  in skills/; none edited; all positional-only calls ✓
+- AC11 (spec.md lines 68 and 115 read ProjectNotFound): confirmed ✓
+  (see Minor N1 below for the missed third occurrence)
+
+**Blockers:**
+
+- none.
+
+**Major:**
+
+- none.
+
+**Minor / nits:**
+
+- **N1 — `docs/spec.md` line 93 still reads `ProjectNotFoundError`.**
+  The plan required fixing lines 68 and 115 (done). A third occurrence
+  sits at line 93 inside a code-comment in the usage example block:
+  `# raises ProjectNotFoundError if neither`. This line was not in the
+  plan's scope statement but is in the same §A2 block. It will mislead
+  future plan_003/plan_004 authors reading only `spec.md`. Low risk,
+  one-line fix; recommend Dev fix in a follow-on commit or the branch
+  merge commit. Not a blocker because it is in a comment, not an
+  acceptance criterion test.
+
+- **N2 — `walked_str` appends `"..."` unconditionally even when fewer
+  than 5 directories were walked.** `lib/project.py` line 60:
+  `", ".join(str(p) for p in walked[:5])` always appends `"..."` in
+  the error message (line 63: `{walked_str}...`). On a shallow temp
+  path with ≤5 parents the ellipsis implies truncation that did not
+  occur. Functionally harmless; the acceptance criterion test passes
+  because it only checks for the presence of paths, not the format.
+  Recommend either `walked[:5]` with a conditional `"..."` suffix or
+  dropping the ellipsis entirely. Left to Dev's discretion.
+
+**Verdict:** accepted
