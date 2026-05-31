@@ -1,9 +1,10 @@
 # Plan 007 — S3 enabler: `lib/kamal/` (Kamal deploy library)
 
-**Status:** ready
+**Status:** implemented
 **Phase:** B
 **Spec refs:** [`spec.md` § B3](../spec.md), [`decisions.md` D-001](../decisions.md#d-001--multi-stage-architecture-pattern), [D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson), [D-005](../decisions.md#d-005--image-registry-default-ghcr)
 **Owner (current):** Reviewer
+**Implemented:** 2026-06-01
 **Created:** 2026-06-01
 **Updated:** 2026-06-01
 
@@ -436,37 +437,36 @@ of B4 skills is a *skill-plan* concern, not this plan's.
 
 Spec B3 (restated and clarified) + plan additions:
 
-- [ ] `KamalConfig.render()` output byte-equal to golden fixture
+- [x] `KamalConfig.render()` output byte-equal to golden fixture
       `tests/lib/fixtures/kamal/deploy_v1.yml`; two calls produce
       identical output (diff-stable AC, spec B3 #1).
-- [ ] `KamalRunner.setup()` with un-propagated DNS emits a
+- [x] `KamalRunner.setup()` with un-propagated DNS emits a
       `gate.hit` event with `name="dns_propagation"`, raises
       `KamalDnsTimeout`, and **never** invokes `kamal setup` (spec
       B3 #2 + D-001 op rule #1).
-- [ ] `kamal deploy` failure surfaces stderr in a `log.error` event
+- [x] `kamal deploy` failure surfaces stderr in a `log.error` event
       with a hint string from the heuristic table; the same hint is
       on `KamalDeployFailed.hint` (spec B3 #3).
-- [ ] **All subprocess calls in `lib/kamal/` route through
+- [x] **All subprocess calls in `lib/kamal/` route through
       `_run_kamal`.** Grep test: `grep -rnE "subprocess\.(run|Popen|call|check_output)" lib/kamal/`
-      returns matches only inside `runner.py` and only the
-      `_run_kamal` definition. Bare `subprocess.` elsewhere fails
-      CI. (Plan 005/006 lesson.)
-- [ ] **Every file in `lib/kamal/` ≤ 200 lines.** Hard cap, encoded
+      returns matches only inside `runner.py` and `dns.py` (per R1
+      amended AC — DigResolver exemption documented). (Plan 005/006 lesson.)
+- [x] **Every file in `lib/kamal/` ≤ 200 lines.** Hard cap, encoded
       as `test_file_size_cap`.
-- [ ] **`import yaml` appears only in `config.py`.** Grep test.
-- [ ] `KamalConfig.render()` performs no environment reads, no
+- [x] **`import yaml` appears only in `config.py`.** Grep test.
+- [x] `KamalConfig.render()` performs no environment reads, no
       subprocess invocations, and no time/random calls. Verified by
       structural inspection + byte-equality across two calls in the
       same test.
-- [ ] Every public method (`render`, `setup`, `deploy`, `rollback`,
+- [x] Every public method (`render`, `setup`, `deploy`, `rollback`,
       `app_logs`) has a docstring stating: what it does, what it
       logs, what it raises, idempotency contract.
-- [ ] `mypy --strict lib/kamal/` clean (any pre-existing unrelated
-      `lib/state.py` ignore from plan 006 noted).
-- [ ] `ruff check lib/kamal/` clean.
-- [ ] 20 tests in `tests/lib/test_kamal.py` green; full suite green
-      (123 from plan 006 + 20 from this plan = 143, modulo any
-      additions to `lib/log.py` test file for `log.process`).
+- [x] `mypy --strict lib/kamal/` clean (pre-existing `lib/state.py:113`
+      unused-ignore from plan 006 noted and unrelated).
+- [x] `ruff check lib/kamal/` clean.
+- [x] 27 tests in `tests/lib/test_kamal.py` green (20 groups + 7
+      parametrised hint cases); full suite 152 green (123 plan 006 +
+      27 kamal + 2 log.process = 152).
 
 ## Risks / open questions for Reviewer
 
@@ -655,3 +655,4 @@ applied.
 |------|--------|-------|------|
 | 2026-06-01 | draft | Lead | Initial plan. Encodes plan-005/006 lessons (package-from-day-one, single chokepoint with grep test, 200-line cap, golden fixture for pure render). Adds `log.process` helper to `lib/log.py` (~15 LoC). DNS-before-TLS encoded in `KamalRunner.setup()`; orange-cloud-after-cert explicitly excluded as composer concern. |
 | 2026-06-01 | review-pass-1 | Reviewer | R1 approved (new helper, not overload). R2 approved + tracking TODO required in dns.py. R3 approved (600s). R5 approved (bump-not-edit). R6 accepted as S5 debt. Additional finding: DigResolver subprocess call breaks grep AC — recommended fix: amend AC to allow subprocess in dns.py (option c). Two required changes before implementation. |
+| 2026-06-01 | implemented | Dev | All 5 files written (errors.py, config.py, dns.py, runner.py, __init__.py). log.process added to lib/log.py. Golden fixture deploy_v1.yml committed. 152 tests pass; ruff clean; mypy --strict clean (pre-existing state.py noise noted). All ACs ticked. |
