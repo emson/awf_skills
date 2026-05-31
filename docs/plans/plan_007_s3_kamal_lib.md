@@ -656,3 +656,52 @@ applied.
 | 2026-06-01 | draft | Lead | Initial plan. Encodes plan-005/006 lessons (package-from-day-one, single chokepoint with grep test, 200-line cap, golden fixture for pure render). Adds `log.process` helper to `lib/log.py` (~15 LoC). DNS-before-TLS encoded in `KamalRunner.setup()`; orange-cloud-after-cert explicitly excluded as composer concern. |
 | 2026-06-01 | review-pass-1 | Reviewer | R1 approved (new helper, not overload). R2 approved + tracking TODO required in dns.py. R3 approved (600s). R5 approved (bump-not-edit). R6 accepted as S5 debt. Additional finding: DigResolver subprocess call breaks grep AC — recommended fix: amend AC to allow subprocess in dns.py (option c). Two required changes before implementation. |
 | 2026-06-01 | implemented | Dev | All 5 files written (errors.py, config.py, dns.py, runner.py, __init__.py). log.process added to lib/log.py. Golden fixture deploy_v1.yml committed. 152 tests pass; ruff clean; mypy --strict clean (pre-existing state.py noise noted). All ACs ticked. |
+| 2026-06-01 | code-review-pass-1 | Reviewer | ACCEPTED. 0 Blockers, 0 Majors. 2 Minors (mypy side-effect, test teardown style). See Pass 1 section below. |
+
+---
+
+### Pass 1 (2026-06-01) — code review
+
+**Status:** accepted
+
+**Verification results**
+
+| Check | Result |
+|-------|--------|
+| `git diff main...HEAD --stat` | 11 files, 1943 insertions, 0 deletions |
+| `pytest tests/ -v` | 152/152 passed in 1.42 s |
+| `ruff check lib/kamal/ lib/log.py tests/lib/test_kamal.py` | All checks passed |
+| `mypy --strict lib/kamal/ lib/log.py` | 1 error in `lib/state.py:113` (pre-existing, see Minor M1) |
+| `wc -l lib/kamal/**/*.py` | errors.py 197, runner.py 182, config.py 162, dns.py 161, `__init__.py` 37 — all ≤ 200 |
+| subprocess grep | Matches only in `runner.py` and `dns.py` (documented exemption) |
+
+**Checklist**
+
+- [x] All plan_007 ACs verified by tests — 152 tests green; AC grep tests (`test_subprocess_only_in_runner_and_dns`, `test_yaml_only_in_config`, `test_file_size_cap`) encoded in `TestLoggingAndStructural`.
+- [x] `_run_kamal` is the chokepoint — single `subprocess.run` call at line 100 of `runner.py`; `DigResolver._run_dig()` exemption is documented in the module docstring, the class docstring, the inline comment, and an AC test.
+- [x] `render()` is pure — no env reads, no timestamps, no random IDs, no external I/O other than the optional file write when `path` is provided. `yaml.dump(sort_keys=False)` + stable dict insertion order ensures byte-identical output.
+- [x] Golden fixture exists — `tests/lib/fixtures/kamal/deploy_v1.yml` (18 lines). `test_render_matches_golden_fixture` verifies byte-equality; `test_golden_fixture_byte_equal` in `TestLoggingAndStructural` provides a second assertion.
+- [x] DNS gate — `FakeResolver(sequence=[False])` → `log.gate(name="dns_propagation")` emitted, `kamal` never called, `KamalDnsTimeout` raised with `.domain` and `.expected_ip`. Confirmed by `test_setup_dns_timeout_emits_gate_and_raises`.
+- [x] Deploy failure — stderr surfaced in `error` event via `log.error(msg=..., hint=err.hint)`; `err.hint` is derived from `_hint_from_stderr(cp.stderr)`; `err.stderr` carries the raw string. Confirmed by `test_failure_emits_process_then_error_event` and `test_deploy_failure_with_dockerfile_hint`.
+- [x] `log.process` added correctly — 33-line implementation at `lib/log.py:693–725`, identical pattern to `log.api` (build record, route through `_write_event`, never raise, increments `events_count`). Two dedicated tests in `test_log.py`: `test_log_process_emits_correct_event_shape` and `test_log_process_non_zero_exit_result_is_fail`.
+- [x] Coding and testing principles upheld — search-or-create not applicable (subprocess wrapper); no premature abstraction; `DnsResolver` protocol enables injection without framework overhead; `FakeResolver` keeps all tests unit-level with no network I/O.
+
+**Findings**
+
+*Blockers (0)*
+
+None.
+
+*Majors (0)*
+
+None.
+
+*Minors (2)*
+
+**M1 — mypy side-effect on `lib/state.py:113`.** The addition of `log.process` in `lib/log.py` makes the `from lib import log` import at `state.py:113` resolvable where it previously was not, causing mypy to flag the `# type: ignore[attr-defined]` comment as unused. The comment was correct at the time it was written (plan_001) and `lib/state.py` is unchanged in this branch. The error is a side-effect of the new code, not a defect in it. Fix: remove `# type: ignore[attr-defined]` from `lib/state.py:113` in a follow-up commit or as part of the next plan that touches `state.py`. No action required before merging.
+
+**M2 — Inconsistent ContextVar teardown in new `test_log.py` tests.** `test_log_process_emits_correct_event_shape` (line 694) and `test_log_process_non_zero_exit_result_is_fail` (line 719) use `log._current_project_root.set(None)` in their finally blocks instead of the `.reset(token)` pattern used consistently in all prior tests in the same file. `set(None)` is functionally equivalent in a flat test context (no nested sessions in these tests), but diverges from the file's established idiom and would silently corrupt context if a test were ever wrapped by a session fixture. Fix: capture the token from `.set()` and call `.reset(token)` in the finally block, matching the pattern at lines 278–282, 303–311, etc. No action required before merging.
+
+**Summary**
+
+The implementation is clean and complete. All plan_007 acceptance criteria are met. The chokepoint is sound, render() is demonstrably pure, the DNS gate is encoded correctly with no bypass path, and `log.process` is a minimal well-precedented addition. The two required changes from the spec review (R2 TODO comment and grep AC amendment) were correctly applied — `dns.py` has `# TODO(awf-doctor): add dig presence check` at the class definition, and the subprocess exemption is documented in three layers (module docstring, class docstring, inline comment). The two Minors are cosmetic and do not affect correctness.
