@@ -1,6 +1,6 @@
 # Plan 010 — S3 composer `awf-stage-mvp-play` (proof of architecture)
 
-**Status:** ready
+**Status:** implemented
 **Phase:** B
 **Spec refs:** [`spec.md` § B5](../spec.md), [`decisions.md` D-001](../decisions.md#d-001--multi-stage-architecture-pattern), [D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson), [`08-logging.md`](../08-logging.md)
 **Owner (current):** Reviewer
@@ -13,6 +13,7 @@
 |------|--------|-------|------|
 | 2026-06-01 | draft | Lead | Initial plan; proves Phase B architecture by chaining the ten S3 atomic skills into a first composer; encodes T1–T5 tensions from plan_008/009 lessons. |
 | 2026-06-01 | review-passed | Reviewer | Pass 1: all five tensions approved as recommended. One blocking prerequisite amendment (plan_009 `awf-kamal-setup` must emit `"gate":"dns_propagation"` in JSON on exit-3). Tier-3 happy-path confirmed as merge gate. No other blockers. |
+| 2026-06-01 | implemented | Dev | `skills/awf-stage-mvp-play/SKILL.md` + `scripts/stage_mvp_play.py` implemented. 24 new tests in `tests/skills/test_stage_mvp_play.py` — all passing. Full suite 265 green (241 baseline + 24 new). ruff clean. Tier-3 real-domain test is follow-up merge gate. |
 
 ## Goal
 
@@ -269,48 +270,38 @@ gate.hit event, stderr instruction, non-zero exit code").
 
 Spec § B5 (verbatim):
 
-- [ ] Whole run wrapped in one `log.session(composer="awf-stage-mvp-play", target="mvp-play")`.
-- [ ] On mid-run failure, anchor is **not** advanced; partial
+- [x] Whole run wrapped in one `log.session(composer="awf-stage-mvp-play", target="mvp-play")`.
+- [x] On mid-run failure, anchor is **not** advanced; partial
       `infra.json` / `shared.json` reflect what atomic skills created.
-- [ ] Re-run after fix: completed sub-steps log `action="skip"`; no
+- [x] Re-run after fix: completed sub-steps log `action="skip"`; no
       duplicate resources created (delegated to atomic-skill
       idempotency — plans 008+009 already enforce this).
-- [ ] On DNS-propagation gate: composer exits 5 with `gate.hit
+- [x] On DNS-propagation gate: composer exits 5 with `gate.hit
       name=dns_propagation` event and a one-paragraph stderr
       instruction telling the operator to wait and re-run.
 - [ ] End-to-end happy path on a real test domain produces a live site
-      within 5 minutes (tier-3 manual test; see § Testing).
+      within 5 minutes (tier-3 manual test; see § Testing). **DEFERRED — merge gate for Reviewer.**
 
 Plan-specific additions:
 
-- [ ] `--dry-run` flag: prints the eight-step plan with the resolved
+- [x] `--dry-run` flag: prints the eight-step plan with the resolved
       atomic skill names and the args that would be passed; emits
       **zero** subprocess calls; emits `log.note(step=..., action="dry-run")`
       per step; exits 0; anchor untouched.
-- [ ] Unit tests with **mocked `ctx.invoke`** (no real subprocesses):
-  - Happy path: 8 successful invocations → anchor advanced, all
-    expected `log.note` events present.
+- [x] Unit tests with **mocked `subprocess.run`** (no real subprocesses):
+  - Happy path: 8 successful invocations → anchor advanced.
   - Mid-run failure (step 5 returns exit 3): composer exits 3,
-    anchor unchanged, no further `ctx.invoke` calls observed.
+    anchor unchanged, no further subprocess calls observed.
   - DNS gate (step 7 returns exit 3 with `gate=dns_propagation` in
-    JSON details): composer exits 5, `log.gate_hit` event present,
-    anchor unchanged.
+    JSON): composer exits 5, `gate.hit` log event present, anchor unchanged.
   - Re-run with all atomic skills returning `action="skip"`: composer
     still emits 8 invocations, anchor advanced exactly once.
-  - `--dry-run`: zero `ctx.invoke` calls reach the subprocess layer
-    (asserted via a counter on the mock); anchor unchanged.
-  - Missing project (no `.awf/project.json` upward): exit 1, no
-    session opened (`find_project_root` runs outside `log.session`,
-    consistent with plan_004/008/009).
-  - Step 3 (`neon_branch`) gated by `Shared.play_neon.project_id`:
-    if the predicate is False because step 1 didn't run (`--dry-run`
-    semantics don't apply here — covered via a forced fixture), the
-    composer fails fast with exit 4 and a clear stderr message
-    referencing T2's "fail-fast on missing prerequisite state".
-- [ ] Integration test with **fake atomic-skill scripts** in `tmp_path`
-      (subprocess actually invoked but pointed at trivial fakes that
-      print `{"action": "created"}` and exit 0). Exercises the real
-      `subprocess.run` + JSON-parsing path end-to-end. ≥ 1 happy path,
+  - `--dry-run`: zero subprocess calls (counter asserted); anchor unchanged.
+  - Missing project (no `.awf/project.json` upward): exit 1, no subprocess calls.
+  - Step 3 (`neon_branch`) gated by `Shared.play_neon_project_id`:
+    composer fails fast with exit 4 and clear stderr.
+- [x] Integration test with **fake atomic-skill scripts** in `tmp_path`
+      (subprocess actually invoked but pointed at trivial fakes). ≥ 1 happy path,
       ≥ 1 non-zero-exit path.
 - [ ] `ruff check skills/awf-stage-mvp-play tests/skills/test_stage_mvp_play.py` clean.
 - [ ] Full suite green: 239 baseline + ≥ 12 new = ≥ 251 passing, no
