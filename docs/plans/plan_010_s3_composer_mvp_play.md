@@ -1,6 +1,6 @@
 # Plan 010 — S3 composer `awf-stage-mvp-play` (proof of architecture)
 
-**Status:** changes-requested
+**Status:** accepted
 **Phase:** B
 **Spec refs:** [`spec.md` § B5](../spec.md), [`decisions.md` D-001](../decisions.md#d-001--multi-stage-architecture-pattern), [D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson), [`08-logging.md`](../08-logging.md)
 **Owner (current):** Reviewer
@@ -638,3 +638,23 @@ If `_emit_output` were ever called outside a session (e.g., in a future refactor
 Update the status log at the top of this file:
 
 | 2026-06-01 | changes-requested | Reviewer | Code review Pass 1: 1 Blocker (DATABASE_URL plaintext in process.invoke log), 2 Majors (re-run breaks at step 4 on skip; missing-script path untested). Not accepted. Fix and re-submit for Pass 2. |
+| 2026-06-01 | accepted | Reviewer | Code review Pass 2: B1 + M1 + M2 all resolved; 269/269 green; ruff clean. Accepted. |
+
+---
+
+### Pass 2 (2026-06-01) — code review
+
+**Reviewer:** Sonnet 4.6
+**Verdict: accepted.**
+
+**Verified:** 269/269 tests green (`uv run --with pytest --with pydantic --with httpx --with hcloud --with pyyaml pytest tests/ -v`). ruff clean (`uvx ruff check` — All checks passed). 4 net-new tests since Pass 1 (265 → 269).
+
+**B1 resolved.** `_redact_cmd` helper (lines 105–121) replaces the value following `--value` and the path following `--from-file` with `<redacted>`. `_invoke` now builds `redacted_cmd = _redact_cmd(cmd)` and passes that to `log.process`; the subprocess still receives the original `cmd`. The dead `safe_args` parameter is gone. `TestSecretRedaction::test_database_url_not_in_log_after_secret_set` asserts that no `process.invoke` log event contains the literal connection string — regression is covered.
+
+**M1 resolved.** `_kamal_secrets_has_database_url` (lines 251–257) checks `.kamal/secrets` for an existing `DATABASE_URL=` line before attempting to read the connection string from step 3. `step_app_secret_set` returns `StepResult(exit_code=0, payload={"action": "skip"})` immediately when the key is already present, bypassing the falsy-`connection_string` guard entirely. The re-run scenario (step 3 returns `{"action": "skip"}` with no `connection_string` field) no longer exits 4.
+
+**M2 resolved.** `_invoke` checks `skill_script.exists()` at line 145 before building the subprocess command; exits 4 with a clear message naming the missing script. `TestMissingSkillScript::test_missing_script_exits_4` and `test_missing_script_no_subprocess_called` cover both the exit code and the no-subprocess guarantee.
+
+**Path-building fix verified.** `script_stem = skill.removeprefix("awf-").replace("-", "_")` (line 141) correctly strips the `awf-` prefix so `awf-neon-branch` resolves to `<AWF_HOME>/skills/awf-neon-branch/scripts/neon_branch.py`, not `awf_neon_branch.py`. The fix is consistent across all eight invoked skills.
+
+**Pass 1 Minors (m1–m3) acknowledged as carry-forwards.** No new minors introduced. Tier-3 real-domain gate remains a PR-merge prerequisite per Pass 1 ruling; that is unchanged.
