@@ -73,6 +73,12 @@ class Passport:
 
     launch: Launch = field(default_factory=Launch)
 
+    # Cloudflare resource IDs keyed by "<TYPE>:<name>" (e.g. "A:api").
+    # Written by awf-cf-dns-record; read by any skill that needs record IDs
+    # for resumability without a remote lookup.  Default empty dict means
+    # old passports load cleanly (no migration needed).
+    cloudflare: dict = field(default_factory=dict)
+
     # ── construction ───────────────────────────────────────────────────
 
     @classmethod
