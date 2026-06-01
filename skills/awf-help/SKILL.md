@@ -1,107 +1,79 @@
 ---
 name: awf-help
-description: Show all available awf-skills, the typical launch pipeline, and what to run next. Use this as the entry point from any blank project directory.
+description: Context-aware orientation for the awf-skills suite. Auto-detects fresh-start, in-project, or overview mode. Use this as the entry point from any blank project directory; reads only, runs anywhere.
 ---
+
+# LLM directive
+
+Use this as the entry point from any blank project directory; reads only,
+runs anywhere. Never mutates state; never calls external APIs.
 
 # Purpose
 
-Orientation skill for the awf-skills suite. Outputs a human-readable
-reference of every available skill, the end-to-end launch pipeline in
-order, and contextual next-step guidance based on the current directory.
+Context-aware orientation skill for the awf-skills suite. Auto-detects
+which of three modes to render:
 
-This skill is Claude-native (body-only). No script — Claude reads this
-file and generates the output directly.
+1. **Fresh-start mode** — no `.awf/project.json` found by walking up from
+   cwd. One screen of orientation pointing at `/awf-create-project` or
+   `/awf-launch`, with a hint that `/awf-help --overview` shows the full
+   system.
+2. **In-project mode** — `.awf/project.json` found. Prints the named
+   composer for `stage+1`, the atomic skills relevant to the current
+   stage, and a "common operations" footer.
+3. **`--overview` mode** — explicit flag. Full catalogue grouped by stage,
+   with links to `docs/07-multi-stage-architecture.md` and
+   `docs/08-logging.md`.
 
 # Prerequisites
 
-None. Works before `awf-doctor`, before a project exists, from any
-directory.
+None. Works before `awf-doctor`, before a project exists, from any directory.
 
-# Inputs
+# Flags
 
-None required. Optional:
-
-- `--pipeline` — show only the ordered pipeline, no skill descriptions.
-- `--next` — show only the recommended next step based on current state.
+| Flag | Description |
+|------|-------------|
+| `--overview` | Full catalogue grouped by stage. |
+| `--pipeline` | Deprecated alias for `--overview`; removed in plan_015. |
+| `--json` | Machine-readable JSON output; includes `"schema_version": 1`. |
 
 # Procedure
 
-Output the following sections in order. Tailor "What to do next" to
-the user's current directory (check whether `passport.json` exists and
-what gates are set).
-
----
-
-## 1. One-liner
-
-> **awf-skills** — a portable Claude Code skill suite that takes you
-> from a blank directory to a live, indexed Svelte website on Cloudflare
-> Pages, with analytics and search-engine submission, in one pipeline.
-
----
-
-## 2. Setup skills (run once)
-
-| Skill | What it does |
-|-------|-------------|
-| `/awf-init` | First-time onboarding — creates `~/.config/awf/.env`, prompts for credentials, sets `AWF_HOME` in your shell rc. Run once after `./install.sh`. |
-| `/awf-doctor` | Pre-flight check — validates CLIs, credentials, and OAuth tokens. Run before any skill that touches a remote API. |
-
----
-
-## 3. The launch pipeline (in order)
-
-| Step | Skill | Notes |
-|------|-------|-------|
-| 1 | `/awf-create-project <domain>` | Scaffold the project directory and `passport.json`. |
-| 2 | `/awf-doctor` | Last chance to fix env before touching APIs. |
-| 3 | `/awf-setup-domain` | Cloudflare zone + Pages project + DNS + HTTPS + www→apex redirect. |
-| 4 | `/awf-setup-nameservers` | Point Namecheap registrar at Cloudflare NS. (Requires domain you own.) |
-| 5 | `/awf-setup-analytics` | Create Fathom site; writes `fathom_site_id` to passport. |
-| 6 | `/awf-generate-content --screenshot <path> --keywords "<kw>"` | **Manual gate**: take a Google SERP screenshot first, then run. Generates site copy and FAQs from the image. |
-| 7 | `/awf-review-passport --mark-reviewed` | Lint passport and mark the review gate complete. |
-| 8 | `/awf-install` | `npm install` in the project directory. |
-| 9 | `/awf-deploy` | Build + deploy to Cloudflare Pages. Site goes live. |
-| 10 | `/awf-setup-gsc` | Add domain to Google Search Console + write TXT verification record. |
-| 11 | `/awf-verify-gsc` | Wait for DNS, verify GSC property, submit sitemap. |
-| 12 | `/awf-submit-bing --confirm-imported` | **Manual gate**: import from GSC in Bing Webmaster first. Then generates IndexNow key, deploys it, submits URLs. |
-
-Run the whole pipeline in one command (with checkpoints at manual gates):
+Run the script directly:
 
 ```
-/awf-launch <domain> --keywords "<kw>"
+uv run "$AWF_HOME/skills/awf-help/scripts/help.py" [flags]
 ```
 
----
+Or from the skill directory:
 
-## 4. Maintenance skills
+```
+uv run scripts/help.py [flags]
+```
 
-| Skill | What it does |
-|-------|-------------|
-| `/awf-status` | Live report of what's done — queries Cloudflare, Fathom, GSC directly. Use to resume a partial launch. |
-| `/awf-update-template` | Re-overlay a newer template version onto an existing project, preserving content. |
+Report the output verbatim to the user.
 
----
+# Exit codes
 
-## 5. Testing tiers (dry-run first)
+| Code | Meaning |
+|------|---------|
+| `0`  | Always (for any non-usage invocation). |
+| `2`  | Argument parsing error (invalid flag combination). |
 
-| Tier | Needs | What it validates |
-|------|-------|------------------|
-| **1 — Dry** | git, uv | init, doctor, create-project, review-passport |
-| **2 — Local build** | + node/npm | template overlay, `npm run build`, substitution |
-| **3 — API-side** | + Cloudflare/Namecheap/Fathom creds | domain setup, analytics (no real domain needed) |
-| **4 — Full launch** | + domain you own + wrangler login | end-to-end to a live site |
+# Usage examples
 
----
+```
+# Auto-detect mode (fresh-start or in-project):
+uv run scripts/help.py
 
-## 6. What to do next
+# Full catalogue:
+uv run scripts/help.py --overview
 
-Check whether `passport.json` exists in the current directory:
+# Machine-readable in-project status:
+uv run scripts/help.py --json
 
-- **No passport.json** and not set up yet → run `/awf-init`, then `/awf-doctor`.
-- **No passport.json** but already set up → run `/awf-create-project <your-domain>`.
-- **passport.json exists** → run `/awf-status` to see exactly where the launch left off.
-- **Unsure if credentials work** → run `/awf-doctor`.
+# Overview as JSON:
+uv run scripts/help.py --overview --json
+```
 
 # Idempotency
 
@@ -109,7 +81,8 @@ Read-only. Safe to run any number of times.
 
 # Failure modes
 
-None — this skill generates output from its own content.
+None — `--overview` works from any directory. In-project mode degrades to
+fresh-start if no `.awf/project.json` is found.
 
 # Manual gates
 

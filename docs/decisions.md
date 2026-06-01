@@ -428,6 +428,8 @@ Default (no flag) keeps current behaviour.
 - *Inferred scope from cwd alone.* Doesn't capture intent ("about
   to do X").
 
+**Implementation note (plan_013).** Stage→check mapping consolidated into `lib/stages.py` alongside `NEXT_COMPOSERS`, `RELEVANT_SKILLS`, etc. `lib/doctor.py` not created; `check.py` owns the `SUBSYSTEM_CHECKS` dispatch table as the behaviour layer. The cross-skill coupling (`awf-status`, `awf-help`, `awf-doctor` all need stage-keyed data) makes a single data module the right choice; see plan_013 § Decisions item 2.
+
 **Revisit if.** Stage definitions diverge enough that
 `for-skill` becomes the primary mode and `for-stage` is redundant.
 
