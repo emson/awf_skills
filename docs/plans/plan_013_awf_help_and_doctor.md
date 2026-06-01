@@ -1,9 +1,9 @@
 # Plan 013 — `awf-help` redesign + `awf-doctor` scoping
 
-**Status:** ready
+**Status:** implemented
 **Phase:** C
 **Spec refs:** [`spec.md` § C3](../spec.md), [`spec.md` § C4](../spec.md), [`decisions.md` D-008](../decisions.md#d-008), [`decisions.md` D-009](../decisions.md#d-009), [`07-multi-stage-architecture.md`](../07-multi-stage-architecture.md), [`08-logging.md`](../08-logging.md)
-**Owner (current):** Implementer
+**Owner (current):** Reviewer
 **Created:** 2026-06-01
 **Updated:** 2026-06-01
 
@@ -13,6 +13,7 @@
 |------|--------|-------|------|
 | 2026-06-01 | draft | Lead | Initial plan. Batches C3 (`awf-help` redesign per D-008) + C4 (`awf-doctor` scoping per D-009) under one plan; both are small, both touch a stage→X mapping, and both want a single home for that mapping (`lib/stages.py`, new). C3 fully replaces the body-only `awf-help`; C4 extends the existing `awf-doctor` with two flags + recent-error surfacing without changing default behaviour. Promotes `NEXT_COMPOSERS` out of `skills/awf-status/scripts/status.py` into `lib/stages.py` (plan_012 explicitly flagged this — see plan_012 § Decisions item 9 and `status.py:50` TODO). Encodes plan_011 / plan_012 lessons: subprocess-only for end-to-end shape; direct `main()` for unit logic; `lib.log.tail_events` is the DRY source; per-provider degrade-to-unknown posture; LLM-directive line in each SKILL.md. |
 | 2026-06-01 | review-approved | Reviewer | Pass 1 complete. All five tensions and D2 verdict below. No blocking issues; two minor notes to carry into implementation. |
+| 2026-06-01 | implemented | Dev | Created `lib/stages.py` (NEXT_COMPOSERS, NEXT_HINTS, RELEVANT_SKILLS, SUBSYSTEMS, STAGE_REQUIREMENTS, SKILL_REQUIREMENTS + 4 helpers). Promoted NEXT_COMPOSERS/NEXT_HINTS imports into `skills/awf-status/scripts/status.py`. Replaced `skills/awf-help/SKILL.md` (body-only → thin wrapper) + added `scripts/help.py` (3-mode dispatch: fresh-start/in-project/overview, --overview, --pipeline alias, --json with schema_version:1). Extended `skills/awf-doctor/scripts/check.py` with SUBSYSTEM_CHECKS dispatch table, ScopeDefault/ScopeStage/ScopeSkill, --for-stage, --for-skill flags (mutual exclusion), empty-requirements exit-0 with note, detect_credential_error_subsystem, lead-with header. Added carry-notes: preflight_required:false in JSON, stage_subsystems landing order assertion. Full suite: 434 passed, 3 skipped (baseline 359 + 75 new). ruff clean. mypy --strict lib/stages.py clean; help.py and check.py clean modulo pre-existing lib/passport.py and lib/state.py advisories. |
 
 ## Goal
 

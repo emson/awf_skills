@@ -38,6 +38,7 @@ sys.path.insert(0, str(AWF_HOME / "lib"))
 
 from lib.log import tail_events  # noqa: E402
 from lib.project import ProjectNotFound  # noqa: E402
+from lib.stages import NEXT_COMPOSERS, NEXT_HINTS  # noqa: E402
 from lib.state import ProjectAnchor, Infra  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -45,24 +46,6 @@ from lib.state import ProjectAnchor, Infra  # noqa: E402
 # ---------------------------------------------------------------------------
 
 IDLE_THRESHOLD_DAYS = 90
-
-# Stage → next composer mapping.
-# Local for now; plan_013 (awf-help) will promote to lib/stages.py.
-NEXT_COMPOSERS: dict[str, str | None] = {
-    "landing": "awf-stage-demo",
-    "demo": "awf-stage-mvp-play",
-    "mvp-play": "awf-stage-prescale",
-    "prescale": "awf-stage-scale",
-    "scale": None,
-}
-
-NEXT_HINTS: dict[str, str] = {
-    "landing": "promote to demo stage when ready",
-    "demo": "promote to mvp-play stage when ready",
-    "mvp-play": "promote to prescale stage when ready",
-    "prescale": "promote to scale stage when ready",
-    "scale": "at terminal stage; operate via atomic skills",
-}
 
 # v1 deferred checks — updated when a later plan implements each one.
 # TODO(plan_013): remove dns_records when DNS drift check ships.
