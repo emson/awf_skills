@@ -147,13 +147,10 @@ def _import_composer():
     for p in [str(_REPO_ROOT), str(_LIB_DIR)]:
         if p not in sys.path:
             sys.path.insert(0, p)
+    # Register before exec so dataclass decorators can resolve cls.__module__.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)  # type: ignore[union-attr]
     return module
-
-
-def _set_argv(monkeypatch, args: "list[str] | None" = None) -> None:
-    """Set sys.argv so argparse doesn't pick up pytest args."""
-    monkeypatch.setattr(sys, "argv", ["awf-stage-mvp-play"] + (args or []))
 
 
 # ---------------------------------------------------------------------------
@@ -189,14 +186,11 @@ def _build_happy_responses() -> list[MagicMock]:
 
 @pytest.fixture(autouse=True)
 def reset_log_dry_run():
-    """Reset log._dry_run_active and sys.argv after each test."""
+    """Reset log._dry_run_active after each test."""
     from lib import log
     log.set_dry_run(False)
-    original_argv = sys.argv[:]
-    sys.argv = ["awf-stage-mvp-play"]
     yield
     log.set_dry_run(False)
-    sys.argv = original_argv
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +242,7 @@ class TestHappyPath:
         seq = _SubprocessSequence(responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 0, f"Expected exit 0, got {rc}"
         assert len(seq.calls) == 8, f"Expected 8 subprocess calls, got {len(seq.calls)}"
@@ -263,7 +257,7 @@ class TestHappyPath:
         seq = _SubprocessSequence(_build_happy_responses())
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 0
         anchor = _read_anchor(tmp_path)
@@ -282,7 +276,7 @@ class TestHappyPath:
         seq = _SubprocessSequence(_build_happy_responses())
 
         with patch("subprocess.run", side_effect=seq):
-            mod.main()
+            mod.main([])
 
         expected_skills = [
             "awf-shared-infra-get",
@@ -304,14 +298,13 @@ class TestHappyPath:
         _make_project(tmp_path, with_infra=True)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("AWF_HOME", str(_REPO_ROOT))
-        monkeypatch.setattr(sys, "argv", ["awf-stage-mvp-play", "--json"])
         _patch_shared(monkeypatch)
 
         mod = _import_composer()
         seq = _SubprocessSequence(_build_happy_responses())
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main(["--json"])
 
         assert rc == 0
         captured = capsys.readouterr()
@@ -345,7 +338,7 @@ class TestHappyPath:
         seq = _SubprocessSequence(skip_responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 0
         assert len(seq.calls) == 8, "All 8 steps invoked even for skip actions"
@@ -379,7 +372,7 @@ class TestMidRunFailure:
         seq = _SubprocessSequence(responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 3
         # Only 5 subprocess calls (steps 1-5); steps 6-8 never invoked
@@ -407,7 +400,7 @@ class TestMidRunFailure:
         seq = _SubprocessSequence(responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 3
         assert len(seq.calls) == 3
@@ -429,7 +422,7 @@ class TestMidRunFailure:
         seq = _SubprocessSequence(responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 2
 
@@ -448,7 +441,7 @@ class TestMidRunFailure:
         seq = _SubprocessSequence(responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 3
 
@@ -485,7 +478,7 @@ class TestDnsGate:
         seq = _SubprocessSequence(responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 5, f"Expected exit 5 for DNS gate, got {rc}"
 
@@ -512,7 +505,7 @@ class TestDnsGate:
         seq = _SubprocessSequence(responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 5
         # gate.hit event should appear in the log
@@ -540,7 +533,7 @@ class TestDnsGate:
         seq = _SubprocessSequence(responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 5
         anchor = _read_anchor(tmp_path)
@@ -567,7 +560,7 @@ class TestDnsGate:
         seq = _SubprocessSequence(responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 3
 
@@ -583,7 +576,6 @@ class TestDryRun:
         _make_project(tmp_path, with_infra=True)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("AWF_HOME", str(_REPO_ROOT))
-        monkeypatch.setattr(sys, "argv", ["awf-stage-mvp-play", "--dry-run"])
         _patch_shared(monkeypatch)
 
         mod = _import_composer()
@@ -595,7 +587,7 @@ class TestDryRun:
             return _make_proc()
 
         with patch("subprocess.run", side_effect=fake_run):
-            rc = mod.main()
+            rc = mod.main(["--dry-run"])
 
         assert rc == 0
         assert call_count == 0, f"--dry-run must not invoke any subprocess, got {call_count}"
@@ -604,13 +596,12 @@ class TestDryRun:
         _make_project(tmp_path, with_infra=True)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("AWF_HOME", str(_REPO_ROOT))
-        monkeypatch.setattr(sys, "argv", ["awf-stage-mvp-play", "--dry-run"])
         _patch_shared(monkeypatch)
 
         mod = _import_composer()
 
         with patch("subprocess.run", side_effect=lambda *a, **k: _make_proc()):
-            rc = mod.main()
+            rc = mod.main(["--dry-run"])
 
         assert rc == 0
         anchor = _read_anchor(tmp_path)
@@ -620,13 +611,12 @@ class TestDryRun:
         _make_project(tmp_path, with_infra=True)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("AWF_HOME", str(_REPO_ROOT))
-        monkeypatch.setattr(sys, "argv", ["awf-stage-mvp-play", "--dry-run"])
         _patch_shared(monkeypatch)
 
         mod = _import_composer()
 
         with patch("subprocess.run", side_effect=lambda *a, **k: _make_proc()):
-            mod.main()
+            mod.main(["--dry-run"])
 
         captured = capsys.readouterr()
         out = captured.out
@@ -668,16 +658,15 @@ class TestMissingPrereq:
         responses = [
             # step 1 succeeds but does NOT populate shared (we control shared via mock)
             _make_proc({"action": "created", "play_neon_project_id": ""}),
-            # step 2 also succeeds (dockerize)
+            # step 2 (dockerize) succeeds; step 3 will fail-fast because shared is still empty
             _make_proc({"action": "created"}),
-            # step 3 is not invoked via subprocess — fails fast in composer before _invoke
         ]
 
         mod = _import_composer()
         seq = _SubprocessSequence(responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 4
 
@@ -707,7 +696,7 @@ class TestMissingPrereq:
         seq = _SubprocessSequence(responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 4, f"Expected exit 4 (missing registry.host), got {rc}"
         # Only steps 1-4 invoked
@@ -734,7 +723,7 @@ class TestNoProject:
             return _make_proc()
 
         with patch("subprocess.run", side_effect=fake_run):
-            rc = mod.main()
+            rc = mod.main([])
 
         assert rc == 1
         assert call_count == 0, "No subprocesses should be called when project not found"
@@ -746,7 +735,7 @@ class TestNoProject:
         mod = _import_composer()
 
         with patch("subprocess.run", side_effect=lambda *a, **k: _make_proc()):
-            mod.main()
+            mod.main([])
 
         # No project dir means log goes to orphan log, not project log
         # Verify no .awf/log.jsonl created at tmp_path
@@ -837,9 +826,10 @@ class TestIntegration:
         # Override AWF_HOME in the module after exec
         old_env = os.environ.get("AWF_HOME")
         os.environ["AWF_HOME"] = str(fake_awf_home)
+        sys.modules[spec.name] = module
         try:
             spec.loader.exec_module(module)
-            rc = module.main()
+            rc = module.main([])
         finally:
             if old_env is not None:
                 os.environ["AWF_HOME"] = old_env
@@ -879,8 +869,9 @@ class TestIntegration:
         script_path = _SKILLS_DIR / "awf-stage-mvp-play" / "scripts" / "stage_mvp_play.py"
         spec = importlib.util.spec_from_file_location("awf_stage_mvp_play_integ2", script_path)
         module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
         spec.loader.exec_module(module)
-        rc = module.main()
+        rc = module.main([])
 
         assert rc == 3
         anchor = _read_anchor(project_dir)
@@ -898,14 +889,13 @@ class TestJsonOutput:
         _make_project(tmp_path, with_infra=True)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("AWF_HOME", str(_REPO_ROOT))
-        monkeypatch.setattr(sys, "argv", ["awf-stage-mvp-play", "--json"])
         _patch_shared(monkeypatch)
 
         mod = _import_composer()
         seq = _SubprocessSequence(_build_happy_responses())
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main(["--json"])
 
         assert rc == 0
         out = json.loads(capsys.readouterr().out.strip())
@@ -923,7 +913,6 @@ class TestJsonOutput:
         _make_project(tmp_path, with_infra=True)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("AWF_HOME", str(_REPO_ROOT))
-        monkeypatch.setattr(sys, "argv", ["awf-stage-mvp-play", "--json"])
         _patch_shared(monkeypatch)
 
         responses = [
@@ -934,7 +923,7 @@ class TestJsonOutput:
         seq = _SubprocessSequence(responses)
 
         with patch("subprocess.run", side_effect=seq):
-            rc = mod.main()
+            rc = mod.main(["--json"])
 
         assert rc == 3
         out = json.loads(capsys.readouterr().out.strip())

@@ -31,6 +31,8 @@ Exit codes:
     5  — gate hit (DNS propagation); wait and re-run
 """
 
+from __future__ import annotations
+
 import argparse
 import json as jsonlib
 import os
@@ -40,7 +42,6 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
 
 # ── Bootstrap: locate AWF_HOME and put lib/ on sys.path ─────────────────────
 # Script lives at: <AWF_HOME>/skills/awf-stage-mvp-play/scripts/stage_mvp_play.py
@@ -467,7 +468,7 @@ def _map_child_exit(exit_code: int, step_name: str) -> int:
     return 3
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="awf-stage-mvp-play",
         description="Promote a project to stage=mvp-play by chaining 8 atomic skills.",
@@ -492,7 +493,7 @@ def main() -> int:
         "--json", action="store_true", default=False,
         help="Emit machine-readable JSON summary on stdout.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Enable dry-run logging (so intent() events fire).
     if args.dry_run:
