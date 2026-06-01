@@ -4,15 +4,13 @@ A portable suite of Claude Code skills that scaffold, configure, deploy,
 and register a small Svelte website end-to-end — from a fresh domain
 through to Bing IndexNow — usable from any directory on disk.
 
-> **Status (Phase A complete).** S1 (landing page on Cloudflare Pages)
-> is fully implemented. The multi-stage foundation — `.awf/` state
-> schemas, dual-walk project locator, structured event logging, and
-> migration tooling — has now landed (75 tests, all green). The
-> S2–S5 stages (demo, MVP-play on shared Hetzner+Neon, prescale,
-> scale) are specified in
-> [`docs/07-multi-stage-architecture.md`](docs/07-multi-stage-architecture.md)
-> and being built incrementally per
-> [`docs/spec.md`](docs/spec.md).
+> **Status (Phase B PROOF complete).** S1 (landing page on Cloudflare
+> Pages) and S3 (MVP-play on shared Hetzner + Neon via Kamal) are both
+> implemented and pipeline-validated. 269 tests green. The full
+> promotion path from empty repo to live S3 site is one command:
+> `/awf-stage-mvp-play`. The remaining S4/S5 stages (prescale, scale)
+> reuse the same atomic-skill + composer model — implementation is
+> incremental per [`docs/spec.md`](docs/spec.md).
 
 ---
 
@@ -149,8 +147,27 @@ In recommended reading order:
 |---|---|---|
 | `lib/state.py` | `.awf/` schemas: `ProjectAnchor`, `Infra`, `Shared` (Pydantic v2) | atomic-write, forward-compat, log-hook |
 | `lib/project.py` | Dual-walk locator: prefers `.awf/project.json`, falls back to `passport.json` | `find_anchor_state()`, `ensure_anchor()` |
-| `lib/log.py` | Structured event log (`session`/`invoke`/`api`/`state_change`/`gate`/`error`/`intent`/`note`) | ContextVar-threaded, ULID-IDed, redaction-by-denylist, best-effort writes |
+| `lib/log.py` | Structured event log (`session`/`invoke`/`api`/`state_change`/`gate`/`error`/`intent`/`note`/`process`/`file_write`) | ContextVar-threaded, ULID-IDed, redaction-by-denylist, best-effort writes |
 | `skills/awf-migrate` | One-shot upgrade from legacy passport-only projects | Wraps `ensure_anchor()`; session-aware |
+
+### S3 stack (Phase B complete — proof of architecture)
+
+| Module / Skill | Purpose | Notes |
+|---|---|---|
+| `lib/hetzner/` | Idempotent Hetzner Cloud client (servers, firewalls, LB, SSH keys, networks) | Single `_call` chokepoint; bearer-token redaction; hcloud SDK transport |
+| `lib/neon/` | Idempotent Neon REST client (projects, branches, connection strings) | httpx transport; `?sslmode=require` enforcement; `napi_*` token redaction |
+| `lib/kamal/` | Kamal YAML renderer + subprocess wrapper | Pure `render()`; DNS-before-TLS gate; golden fixture; `KamalDnsTimeout` |
+| `awf-shared-infra-get` | Mint/reuse the user-scope play Hetzner server + play Neon project | Writes `~/.config/awf/shared.json` |
+| `awf-hetzner-server` | Mint one project-scope Hetzner VM | Writes `.awf/infra.json` |
+| `awf-neon-project` | Mint one Neon project | Writes `.awf/infra.json` |
+| `awf-neon-branch` | Mint one Neon branch on a project | Writes `.awf/infra.json` |
+| `awf-cf-dns-record` | Create/update one Cloudflare DNS record | Writes `passport.cloudflare` |
+| `awf-app-dockerize` | Scaffold `Dockerfile`, `/up` healthcheck, `lib/db.ts` | Versioned constant; drift-aware (never clobbers user edits) |
+| `awf-app-secret-set` | Upsert one `KEY=VAL` in `.kamal/secrets` | Mutually-exclusive `--value` / `--from-env` / `--from-file` |
+| `awf-kamal-config` | Render `config/deploy.yml` from anchor + infra | Pure; idempotent |
+| `awf-kamal-setup` | First-time `kamal setup` (DNS-gated) | Emits structured `gate=dns_propagation` JSON on timeout |
+| `awf-kamal-deploy` | Rolling `kamal deploy` | Updates `Infra.kamal.last_deploy_image` |
+| `awf-stage-mvp-play` | **Composer** — promote project to `stage=mvp-play` | Subprocess-chains the 10 atomic skills; secret-redaction in logs; idempotent re-runs |
 
 ### Multi-agent build workflow
 
