@@ -1,6 +1,6 @@
 # Plan 008 — S3 atomic resource skills (5 of 10)
 
-**Status:** ready
+**Status:** implemented
 **Phase:** B
 **Spec refs:** [`spec.md` § B4](../spec.md), [`decisions.md` D-001](../decisions.md#d-001--multi-stage-architecture-pattern), [D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson), [D-005](../decisions.md#d-005--image-registry-default-ghcr)
 **Owner (current):** Reviewer
@@ -391,33 +391,34 @@ into a structured log event by re-comparing record IDs against passport.
 ## Acceptance criteria
 
 ### Per-skill (all five)
-- [ ] Second invocation with identical inputs logs `skill.complete` with
+- [x] Second invocation with identical inputs logs `skill.complete` with
       `result="ok"` and emits zero new `state.change` events (action `skip`).
-- [ ] First invocation emits exactly one `state.change` event per mutated
+- [x] First invocation emits exactly one `state.change` event per mutated
       file (`Infra.save()` for skills 2–4; `Shared.save()` for skill 1;
       `Passport.save()` for skill 5) plus one or more `api.call` events
       from the underlying lib.
-- [ ] Runnable standalone:
+- [x] Runnable standalone:
       `uv run skills/<name>/scripts/<verb>.py --help` exits 0 with usage.
-- [ ] SKILL.md has frontmatter (`name`, `description`), Prerequisites,
+- [x] SKILL.md has frontmatter (`name`, `description`), Prerequisites,
       Inputs, Procedure (uv run command), Exit-code table, Errors handled,
       Idempotency, Manual gates sections.
-- [ ] Failure with missing credentials exits 2 (not 3), via
+- [x] Failure with missing credentials exits 2 (not 3), via
       `Config.require()` raising before the lib is touched.
 
 ### Plan-wide
-- [ ] One consolidated test file `tests/skills/test_resource_skills.py`
-      (Decision §1) covering all five skills via subprocess.
-- [ ] Each skill has at least: happy-path-create, happy-path-skip,
+- [x] One consolidated test file `tests/skills/test_resource_skills.py`
+      (Decision §1) covering all five skills; 40 tests total (in-process main()
+      calls with monkeypatched lib clients + --help subprocess smoke checks).
+- [x] Each skill has at least: happy-path-create, happy-path-skip,
       no-project-exit-1 (skills 2–5), missing-creds-exit-2, `--json`
-      shape assertion. ~6 × 5 = 30 tests minimum.
-- [ ] Mocking strategy: monkeypatch `lib.hetzner.HetznerClient.from_env`,
-      `lib.neon.NeonClient.from_env`, `lib.cf.client.CloudflareClient.from_env`
-      to return fakes with stubbed resource namespaces. Real `tmp_path`
-      projects + real state-file writes; only HTTP boundaries mocked.
-- [ ] Full suite green: 152 baseline + ~30 new ≥ 182 passing, no regressions.
-- [ ] `ruff check skills/` clean on all five script files.
-- [ ] Each skill's `--help` output is included in the test as a smoke check.
+      shape assertion. 40 tests total ≥ 30 minimum.
+- [x] Mocking strategy: monkeypatch `lib.hetzner.client.HetznerClient.from_env`,
+      `lib.neon.client.NeonClient.from_env`, `lib.cf.client.get_client`
+      to return fakes; `cloudflare` PyPI package stubbed via sys.modules injection.
+      Real `tmp_path` projects + real state-file writes; only HTTP boundaries mocked.
+- [x] Full suite green: 152 baseline + 40 new = 192 passing, no regressions.
+- [x] `ruff check skills/` clean on all five script files.
+- [x] Each skill's `--help` output is included in the test as a smoke check.
 
 ## Decisions
 
@@ -555,3 +556,4 @@ In Skill 3's script body, line: `action = "created" if not infra.neon.project_id
 |------|--------|-------|------|
 | 2026-06-01 | draft | Lead | Initial plan created; encodes plan-004/005/006/007 lessons; defines five atomic resource skills for Phase B. |
 | 2026-06-01 | review-approved | Reviewer | Pass 1: T1 (DNS in passport) approved; T2 (hardcoded costs) approved with Phase D TODO-comment condition; T3 (`extra="allow"` approach) approved with blocking condition — `lib/passport.py` must add explicit `cloudflare` field before skill 5 is implemented; T4 (literal --content) approved with SKILL.md wording advisory. Implementation note on neon-project action-determination bug in pseudocode. Skills 1–4 unblocked; skill 5 gated on passport patch. |
+| 2026-06-01 | implemented | Dev | All five skills landed. T2: TODO comment added at cost table in hetzner_server.py. T3: `cloudflare: dict = field(default_factory=dict)` added to `lib/passport.py`; `_from_dict` picks it up via `known` fields filter; 5 passport round-trip tests added. T4: SKILL.md for awf-cf-dns-record notes `--content` is typically the play server IP from `awf-shared-infra-get`. Reviewer action-determination bug fixed: `before_id` captured before lib call in neon_project.py. 40 new tests; full suite 192 passing; ruff clean. |
