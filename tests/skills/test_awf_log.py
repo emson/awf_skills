@@ -456,6 +456,37 @@ class TestNote:
         captured = capsys.readouterr()
         assert "error" in captured.err
 
+    def test_note_json_flag_emits_action_and_session(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        """note --json emits {"action":"noted","session":"<id>"} and exits 0."""
+        _make_project(tmp_path)
+        mod = _get_awf_log()
+        monkeypatch.chdir(tmp_path)
+        rc = mod.main(["note", "json note check", "--json"])
+        assert rc == 0
+        captured = capsys.readouterr()
+        lines = [ln for ln in captured.out.splitlines() if ln.strip()]
+        assert len(lines) == 1
+        obj = json.loads(lines[0])
+        assert obj["action"] == "noted"
+        assert len(obj["session"]) == 26  # ULID length
+
+    def test_note_json_event_written_to_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        """note --json still writes the event to the project log."""
+        _make_project(tmp_path)
+        mod = _get_awf_log()
+        monkeypatch.chdir(tmp_path)
+        mod.main(["note", "persisted note", "--json"])
+        log_path = tmp_path / LOG_DIRNAME / LOG_FILENAME
+        assert log_path.exists()
+        lines = [ln for ln in log_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        note_events = [json.loads(ln) for ln in lines if json.loads(ln).get("type") == "note"]
+        assert len(note_events) == 1
+        assert note_events[0]["data"]["text"] == "persisted note"
+
 
 # ===========================================================================
 # replay tests
@@ -523,6 +554,104 @@ class TestReplay:
         captured = capsys.readouterr()
         assert "awf-hetzner-server" in captured.out
         assert "ok" in captured.out
+
+    def test_replay_json_flag_emits_structured_object(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        """replay --json emits a single JSON object with narrative and steps keys."""
+        _make_project(tmp_path)
+        sid = "REPLAYJSON0000000000000000"
+        extra = [
+            {"ts": "2026-06-01T10:00:01.000Z", "session": sid, "type": "skill.invoke",
+             "skill": "awf-deploy", "result": "pending",
+             "project": "x", "stage": "landing", "actor": "claude-code",
+             "data": {"args": {}}},
+            {"ts": "2026-06-01T10:00:02.000Z", "session": sid, "type": "skill.complete",
+             "skill": "awf-deploy", "result": "ok", "duration_ms": 1234,
+             "project": "x", "stage": "landing", "actor": "claude-code",
+             "data": {"args": {}}},
+        ]
+        events = _canned_session(sid, composer="awf-stage-mvp", extra_events=extra)
+        _write_log_events(tmp_path, events)
+        mod = _get_awf_log()
+        monkeypatch.chdir(tmp_path)
+        rc = mod.main(["replay", sid, "--json"])
+        assert rc == 0
+        captured = capsys.readouterr()
+        lines = [ln for ln in captured.out.splitlines() if ln.strip()]
+        assert len(lines) == 1
+        obj = json.loads(lines[0])
+        # Required top-level keys per plan spec
+        assert obj["session"] == sid
+        assert "narrative" in obj
+        assert "steps" in obj
+        assert isinstance(obj["steps"], list)
+        assert obj["composer"] == "awf-stage-mvp"
+        assert obj["result"] == "ok"
+
+    def test_replay_json_narrative_follows_spec_template(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        """replay --json narrative matches: Composer <C> targeting <T> started at <ts>..."""
+        _make_project(tmp_path)
+        sid = "NARRATIVETEST000000000000"
+        events = _canned_session(sid, composer="awf-test-composer", target="mvp-play")
+        _write_log_events(tmp_path, events)
+        mod = _get_awf_log()
+        monkeypatch.chdir(tmp_path)
+        mod.main(["replay", sid, "--json"])
+        captured = capsys.readouterr()
+        obj = json.loads(captured.out.strip())
+        narrative = obj["narrative"]
+        assert "awf-test-composer" in narrative
+        assert "mvp-play" in narrative
+        # Spec template: starts with "Composer <C> targeting <T>"
+        assert narrative.startswith("Composer awf-test-composer targeting mvp-play")
+
+    def test_replay_json_in_progress_session(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        """replay --json on in-progress session sets result='in-progress' and notes it in narrative."""
+        _make_project(tmp_path)
+        sid = "INPROGJSON000000000000000A"
+        events = _canned_session(sid, with_end=False)
+        _write_log_events(tmp_path, events)
+        mod = _get_awf_log()
+        monkeypatch.chdir(tmp_path)
+        rc = mod.main(["replay", sid, "--json"])
+        assert rc == 0
+        captured = capsys.readouterr()
+        obj = json.loads(captured.out.strip())
+        assert obj["result"] == "in-progress"
+        assert "no session.end recorded" in obj["narrative"]
+
+    def test_replay_json_steps_contain_skill_entries(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        """replay --json steps list contains one entry per skill with type, skill, action, result."""
+        _make_project(tmp_path)
+        sid = "STEPSJSON000000000000000AA"
+        extra = [
+            {"ts": "2026-06-01T10:00:01.000Z", "session": sid, "type": "skill.invoke",
+             "skill": "awf-cf-zone", "result": "pending",
+             "project": "x", "stage": "landing", "actor": "claude-code", "data": {"args": {}}},
+            {"ts": "2026-06-01T10:00:02.000Z", "session": sid, "type": "skill.complete",
+             "skill": "awf-cf-zone", "result": "ok", "duration_ms": 500,
+             "project": "x", "stage": "landing", "actor": "claude-code", "data": {"args": {}}},
+        ]
+        events = _canned_session(sid, extra_events=extra)
+        _write_log_events(tmp_path, events)
+        mod = _get_awf_log()
+        monkeypatch.chdir(tmp_path)
+        mod.main(["replay", sid, "--json"])
+        captured = capsys.readouterr()
+        obj = json.loads(captured.out.strip())
+        skill_steps = [s for s in obj["steps"] if s.get("type") == "skill"]
+        assert len(skill_steps) == 1
+        step = skill_steps[0]
+        assert step["skill"] == "awf-cf-zone"
+        assert step["result"] == "ok"
+        assert step["duration_ms"] == 500
 
 
 # ===========================================================================

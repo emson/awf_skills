@@ -758,6 +758,55 @@ def file_write(
         print(f"warn: log.file_write failed: {e}", file=sys.stderr)
 
 
+def set_project_context(
+    root: Path | None,
+    slug: str | None,
+    stage: str | None,
+    actor: str | None = "human",
+    session_id: str | None = None,
+) -> str:
+    """Set the project ContextVars for the current context.
+
+    Public helper for callers (e.g. CLI skill scripts) that need to emit
+    events outside a ``log.session()`` context manager — such as a bare
+    ``log.note()`` call — without touching private module internals.
+
+    All parameters are optional; pass ``None`` to leave the corresponding
+    ContextVar at its current value (i.e. only set what you provide).
+
+    This function does **not** return reset tokens. The caller is
+    responsible for restoring prior state if required. For well-scoped
+    mutations (emit one event then exit) that is not necessary.
+
+    Returns the session_id that was set (either the one supplied or a
+    freshly-minted ULID). Callers that need to echo the id (e.g.
+    ``awf-log note --json``) can capture this return value.
+
+    Args:
+        root:       Project root directory, or ``None`` to leave unchanged.
+        slug:       Project slug string, or ``None`` to leave unchanged.
+        stage:      Current pipeline stage string, or ``None`` to leave
+                    unchanged.
+        actor:      Actor identifier (default ``"human"``), or ``None`` to
+                    leave unchanged.
+        session_id: Explicit session ULID to stamp on subsequent events.
+                    If ``None``, a fresh ULID is minted and set so that
+                    the caller can capture it for JSON output (e.g.
+                    ``awf-log note --json``).
+    """
+    if root is not None:
+        _current_project_root.set(root)
+    if slug is not None:
+        _current_project_slug.set(slug)
+    if stage is not None:
+        _current_stage.set(stage)
+    if actor is not None:
+        _current_actor.set(actor)
+    effective_sid = session_id if session_id is not None else _ulid()
+    _current_session_id.set(effective_sid)
+    return effective_sid
+
+
 def set_dry_run(active: bool) -> None:
     """Set the process-global dry-run flag.
 

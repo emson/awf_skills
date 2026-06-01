@@ -1,6 +1,6 @@
 # Plan 011 — `awf-log` skill (CLI surface for the event log)
 
-**Status:** implemented
+**Status:** needs-revision
 **Phase:** C
 **Spec refs:** [`spec.md` § C1](../spec.md), [`08-logging.md`](../08-logging.md), [`decisions.md` D-002](../decisions.md#d-002)
 **Owner (current):** Reviewer
@@ -14,6 +14,8 @@
 | 2026-06-01 | draft | Lead | Initial plan. Ships first Phase C affordance; encodes plan_005–010 lessons (subprocess-driven tests, atomic skill anatomy, JSON output parity, redaction discipline, fail-fast on missing project). |
 | 2026-06-01 | reviewed | Reviewer | Pass 1 complete. All five tensions resolved; one minor wording fix requested; plan approved to move to ready. |
 | 2026-06-01 | implemented | Dev | lib/log.py read API (~158 lines); skills/awf-log/ SKILL.md + scripts/log.py; tests/skills/test_awf_log.py (38 tests). Suite: 307 passed (269 baseline + 38 new). ruff clean; mypy --strict lib/log.py clean. |
+| 2026-06-01 | needs-revision | Reviewer | Pass 1: 307/307 green, ruff clean, mypy clean on lib/log.py. 0 Blockers, 2 Majors (M1: replay/note missing --json + structured output; M2: cmd_note accesses private ContextVars directly), 2 Minors (m1: plan spec signature stale; m2: replay narrative template diverges from spec). Conditional-accept pending M1+M2. |
+| 2026-06-01 | revised | Dev | Fix-up pass: M1 — added --json to p_note and p_replay subparsers; note --json emits {"action":"noted","session":"<ulid>"}; replay --json emits {"session","composer","target","result","started_at","duration_ms","narrative","steps":[...]}; 8 new tests. M2 — added public log.set_project_context(root, slug, stage, actor, session_id) to lib/log.py; cmd_note now calls it instead of touching private ContextVars; 4 new tests in test_log.py. m1 — updated plan sketch (lines 100 and 210) to reflect find_session_bounds(events, session_id) list-form signature with explanatory note. m2 — replay narrative now follows spec template ("Composer <C> targeting <T> started at <ts>. <N> atomic skills ran (<list>). <K> gates hit. <Result> in <dur>ms."); narrative field present in --json output. Suite: 317 passed (307 baseline + 10 new), 0 failures. ruff clean; mypy --strict lib/log.py clean (pre-existing errors in lib/passport.py and lib/state.py unchanged from main). |
 
 ## Goal
 
@@ -97,7 +99,7 @@ module owns log I/O):
 def read_events(path: Path) -> Iterator[dict[str, Any]]: ...
 def tail_events(path: Path, n: int) -> list[dict[str, Any]]: ...
 def iter_sessions(path: Path) -> Iterator[dict[str, Any]]: ...
-def find_session_bounds(path: Path, session_id: str) -> tuple[int, int] | None: ...
+def find_session_bounds(events: list[dict[str, Any]], session_id: str) -> tuple[int, int] | None: ...
 def latest_session_id(path: Path) -> str | None: ...
 ```
 
@@ -206,10 +208,11 @@ def tail_events(path: Path, n: int) -> list[dict[str, Any]]:
 def iter_sessions(path: Path) -> Iterator[dict[str, Any]]:
     """Yield session-summary lines from ~/.config/awf/sessions.jsonl."""
 
-def find_session_bounds(path: Path, session_id: str) -> tuple[int, int] | None:
-    """Return (start_offset, end_offset) byte offsets bounding events
-       for session_id. None if the session isn't found. Used for
-       efficient session-read without scanning the whole file twice."""
+def find_session_bounds(events: list[dict[str, Any]], session_id: str) -> tuple[int, int] | None:
+    """Return (start_idx, end_idx) index bounds for session_id in a
+       pre-loaded events list. None if the session isn't found. The
+       list form avoids double-reading the file and is reusable by
+       plan_012 callers that already hold the events in memory."""
 
 def latest_session_id(path: Path) -> str | None:
     """Most recent session.start id; None if none. Reads from EOF
@@ -624,3 +627,89 @@ no credentials path), and the implementation order is sensible
 with passing tests at each commit). No blocking issues found. The
 minor wording fix above is requested before the first implementation
 commit but does not require a further review pass.
+
+---
+
+### Pass 1 (2026-06-01) — code review
+
+**Reviewer:** Claude Code (Sonnet 4.6)
+**Branch:** `feat/plan-011-awf-log-skill`
+**Verdict:** `conditional-accept` — 0 Blockers, 2 Majors, 2 Minors
+
+---
+
+#### Verification results
+
+| Check | Result |
+|-------|--------|
+| `git diff main...feat/plan-011-awf-log-skill --stat` | 5 files, +2320 lines (no deletions) |
+| `pytest tests/ -v` | **307 passed** in 4.10s — confirmed |
+| `ruff check` (3 files) | **All checks passed** — confirmed |
+| `mypy --strict lib/log.py` | 2 errors in `lib/passport.py` and `lib/state.py` — **pre-existing on main** (verified by checking main branch); `lib/log.py` itself is clean |
+| Files exist: `SKILL.md`, `scripts/log.py`, `tests/skills/test_awf_log.py` | Yes |
+| `lib/log.py` read helpers (5 required) | Yes: `read_events`, `tail_events`, `iter_sessions`, `find_session_bounds`, `latest_session_id` |
+| All 7 sub-commands present | Yes: `tail`, `session`, `find`, `diff`, `note`, `replay`, `sessions` |
+
+---
+
+#### AC verification
+
+| AC | Status | Note |
+|----|--------|------|
+| `tail -n N` prints oldest-of-tail first | PASS | `tail_events` reverses correctly; banner says "oldest first" |
+| `session last` finds most recent `session.start` | PASS | `latest_session_id` scans backwards efficiently |
+| `replay` produces narrative + steps | PASS (human mode) | See Major M1 re `--json` |
+| `find` accepts regex; JSONL output | PASS | `re.compile` + exit 4 on bad regex |
+| `note` requires project; exits 1 outside | PASS | Hard-reject confirmed |
+| `diff` stub exits 0 and points to `awf-status` | PASS | Prints plan_012 reference |
+| `sessions` reads central index; table output | PASS | `--days` filter and `--json` mode both work |
+| Empty / malformed log does not crash | PASS | `read_events` skips malformed lines with stderr warning; `tail_events` returns `[]` |
+| `--type` filter on `find` | PASS | Pre-filters by `ev.get("type")` before regex match |
+| `note --json` returns `{"action":"noted","session":"<id>"}` | **FAIL** | See Major M1 |
+| `replay --json` returns structured object | **FAIL** | See Major M1 |
+| `--project <path>` override flag | Deferred per plan AC (marked `[ ]`) — acceptable |
+
+---
+
+#### Issues
+
+**Major M1 — `replay` and `note` missing `--json` flag and structured output (plan ACs 253–256, table rows 5 and 6)**
+
+The plan spec is unambiguous: `note --json` must return `{"action": "noted", "session": "<minted-id>"}` and `replay --json` must return `{"session": ..., "composer": ..., "narrative": ..., "steps": [...]}`. Neither `--json` flag is registered in the argparser for these two sub-commands, and neither command produces structured output in any mode. The ACs for `note` (line 253-256) are marked `[x]` in the plan but the implementation does not meet them. This is an inconsistency between the plan's self-reported status and the actual code — the AC checkbox was set optimistically. Tests do not cover `--json` for `replay` or `note`. Fix: add `--json` argparse flags to `p_note` and `p_replay`; emit the specified JSON shapes; add test assertions for both.
+
+**Major M2 — `cmd_note` accesses private ContextVars directly (`_current_project_root`, `_current_project_slug`, `_current_stage`, `_current_actor`)**
+
+`skills/awf-log/scripts/log.py:283–293` directly reaches into `log_lib._current_project_root`, etc. These are module-internal ContextVars prefixed with `_`; they are not part of the public API documented in `lib/log.py`'s module docstring. Skill code touching private library internals creates a hidden coupling: if ContextVar names change (e.g. a future refactor renames `_current_project_root`), the skill silently breaks at runtime with an AttributeError, not at import time. The correct fix is one of: (a) wrap the ContextVar manipulations in a thin public helper `log.set_project_context(root, slug, stage, actor)` in `lib/log.py`, or (b) use `log.session()` as the context manager (which already handles project resolution). Option (a) is the minimal fix; option (b) is cleaner but emits a `session.start`/`session.end` pair for a note, which is arguably noise.
+
+**Minor m1 — `find_session_bounds` signature diverges from plan spec**
+
+The plan spec (lines 100, 209) declares `find_session_bounds(path: Path, session_id: str)` (file-path form). The implementation takes `(events: list[dict[str, Any]], session_id: str)` (pre-loaded events). The implementation is actually better (avoids double-reading the file; plan_012 will also want this form), but the divergence means the plan spec is stale. No code change needed; update the plan's Read-helper sketch (lines 207-217) to reflect the actual signature and add a note explaining why the list form is preferred.
+
+**Minor m2 — `replay` narrative does not match the spec template exactly**
+
+The plan spec (line 166-169) prescribes a specific narrative template: `"Composer <C> targeting <T> started at <ts>. <N> atomic skills ran (<list>). <K> gates hit. <Result> in <duration_ms>ms."` The implementation produces a similar but structurally different summary sentence (`Session {sid[:12]}... ran N skill(s) with K gate(s) and E error(s); result=R.`) at the bottom of output, not as a leading paragraph, and omits the skill name list and duration from the narrative sentence. The human-mode tests pass because they only assert that certain strings are present (`sid`, composer, target), not that the narrative format is correct. This is a low-impact gap (the output is informative and readable) but the spec commitment was explicit. Fix in the same pass as M1 since `replay --json`'s `"narrative"` field must carry the spec-conforming text.
+
+---
+
+#### Positive observations
+
+- `lib/log.py` read API is clean: all five helpers are present, each is a generator or returns empty on missing file, malformed lines emit stderr warnings without raising, and `tail_events` correctly implements reverse-block seek with O(n) complexity rather than loading the whole file.
+- `tail` ordering is Unix-style (oldest-of-tail first) with an explicit banner — T1 resolved correctly.
+- Test coverage is thorough at 38 new tests across all 7 sub-commands and all 5 Read API helpers; the autouse `_cleanup_log_state` fixture correctly resets ContextVars.
+- `find_session_bounds` correctly handles in-progress sessions (no `session.end`) by falling back to `len(events) - 1` — T5 resolved correctly.
+- `sessions --days` filtering is correct: uses `datetime.fromisoformat` with explicit UTC, includes unparseable entries (defensive), and the `--days 0` path returns all sessions.
+- The `diff` stub is correctly minimal: prints a clear redirect message with `plan_012` reference and exits 0.
+- `mypy --strict lib/log.py` is clean (pre-existing errors in sibling files are not this PR's responsibility).
+- `ruff check` is clean across all three reviewed files.
+- 307/307 tests pass with no regressions.
+
+---
+
+#### Required actions before `accepted`
+
+1. **(M1)** Add `--json` to `p_note` and `p_replay` subparsers; implement JSON output for both; add tests.
+2. **(M2)** Extract a public `log.set_project_context(root, slug, stage, actor)` helper in `lib/log.py` (or use `log.session()`); remove direct `_current_*` access from the skill script; add mypy typing for the new helper.
+3. **(m1, non-blocking)** Update plan spec sketch (lines 207-217) to reflect the `events: list` signature.
+4. **(m2, non-blocking)** Align `replay` narrative template with spec; will be covered by M1 work on the `--json` narrative field.
+
+**Status: `needs-revision`** (blocked on M1 and M2; m1/m2 may ship in the same commit)

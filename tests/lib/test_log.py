@@ -804,3 +804,76 @@ def test_log_file_write_never_raises(tmp_path: Path) -> None:
         log.file_write(path="Dockerfile", bytes=100)  # must not raise
     finally:
         log._write_event = original  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
+# set_project_context (M2 fix — public API)
+# ---------------------------------------------------------------------------
+
+
+def test_set_project_context_sets_contextvar_values(tmp_path: Path) -> None:
+    """set_project_context sets root, slug, stage, and actor ContextVars."""
+    from lib.log import (
+        _current_actor,
+        _current_project_root,
+        _current_project_slug,
+        _current_session_id,
+        _current_stage,
+    )
+
+    project_root = _make_project(tmp_path)
+    sid = log.set_project_context(
+        root=project_root,
+        slug="my-project",
+        stage="mvp-play",
+        actor="cli",
+    )
+
+    assert _current_project_root.get() == project_root
+    assert _current_project_slug.get() == "my-project"
+    assert _current_stage.get() == "mvp-play"
+    assert _current_actor.get() == "cli"
+    # Returns a 26-char ULID
+    assert len(sid) == 26
+    assert _current_session_id.get() == sid
+
+
+def test_set_project_context_returns_provided_session_id(tmp_path: Path) -> None:
+    """set_project_context returns the caller-supplied session_id if given."""
+    from lib.log import _current_session_id
+
+    provided = "01TESTSESSIONIDPROVIDEDXXX"
+    sid = log.set_project_context(
+        root=None,
+        slug=None,
+        stage=None,
+        session_id=provided,
+    )
+    assert sid == provided
+    assert _current_session_id.get() == provided
+
+
+def test_set_project_context_none_args_do_not_overwrite(tmp_path: Path) -> None:
+    """set_project_context with None args leaves existing ContextVar values intact."""
+    from lib.log import _current_project_slug
+
+    _current_project_slug.set("already-set")
+    log.set_project_context(root=None, slug=None, stage=None)
+    assert _current_project_slug.get() == "already-set"
+
+
+def test_set_project_context_note_event_uses_returned_sid(tmp_path: Path) -> None:
+    """A note event emitted after set_project_context carries the returned session id."""
+    project_root = _make_project(tmp_path)
+    sid = log.set_project_context(
+        root=project_root,
+        slug="example",
+        stage="landing",
+        actor="cli",
+    )
+    log.note("hello from set_project_context", by="human")
+
+    events = _read_log_lines(project_root)
+    note_events = [e for e in events if e.get("type") == "note"]
+    assert len(note_events) == 1
+    assert note_events[0]["session"] == sid

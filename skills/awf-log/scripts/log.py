@@ -279,20 +279,21 @@ def cmd_note(args: argparse.Namespace) -> int:
         print(f"error: could not load project anchor: {e}", file=sys.stderr)
         return 1
 
-    # Set project ContextVars manually (we're outside a log.session)
-    tok_root = log_lib._current_project_root.set(root)
-    tok_slug = log_lib._current_project_slug.set(anchor.slug)
-    tok_stage = log_lib._current_stage.set(anchor.stage)
-    tok_actor = log_lib._current_actor.set("cli")
-    try:
-        log_lib.note(args.text, by="human")
-    finally:
-        log_lib._current_project_root.reset(tok_root)
-        log_lib._current_project_slug.reset(tok_slug)
-        log_lib._current_stage.reset(tok_stage)
-        log_lib._current_actor.reset(tok_actor)
+    # Set project context via the public helper (avoids touching private ContextVars).
+    # set_project_context mints a session ULID so we can echo it in --json output.
+    sid = log_lib.set_project_context(
+        root=root,
+        slug=anchor.slug,
+        stage=anchor.stage,
+        actor="cli",
+    )
 
-    print(f"note appended to {root / LOG_DIRNAME / LOG_FILENAME}")
+    log_lib.note(args.text, by="human")
+
+    if getattr(args, "json", False):
+        print(jsonlib.dumps({"action": "noted", "session": sid}, separators=(",", ":")))
+    else:
+        print(f"note appended to {root / LOG_DIRNAME / LOG_FILENAME}")
     return 0
 
 
@@ -331,100 +332,160 @@ def cmd_replay(args: argparse.Namespace) -> int:
     start_idx, end_idx = bounds
     session_events = all_events[start_idx : end_idx + 1]
 
-    _render_replay(sid, session_events)
+    _render_replay(sid, session_events, as_json=getattr(args, "json", False))
     return 0
 
 
-def _render_replay(sid: str, events: list[dict[str, Any]]) -> None:
-    """Print a narrative replay of a session to stdout."""
+def _build_replay_data(
+    sid: str, events: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Build the structured replay data dict from session events.
+
+    Returns a dict with keys: session, composer, target, result,
+    started_at, duration_ms, narrative, steps.
+    """
     start_ev = next((e for e in events if e.get("type") == "session.start"), None)
     end_ev = next((e for e in events if e.get("type") == "session.end"), None)
 
     composer = start_ev["data"].get("composer", "unknown") if start_ev else "unknown"
     target = start_ev["data"].get("target_stage", "unknown") if start_ev else "unknown"
-    started_at = start_ev.get("ts", "unknown")[:19].replace("T", " ") if start_ev else "unknown"
-
-    print(f"# Session replay: {sid}")
-    print(f"  composer : {composer}")
-    print(f"  target   : {target}")
-    print(f"  started  : {started_at}")
+    started_at = start_ev.get("ts", "") if start_ev else ""
 
     if end_ev:
-        ended_at = end_ev.get("ts", "unknown")[:19].replace("T", " ")
-        duration = end_ev.get("duration_ms")
         result = end_ev.get("result", "unknown")
-        print(f"  ended    : {ended_at}")
-        if duration is not None:
-            print(f"  duration : {duration} ms")
-        print(f"  result   : {result}")
+        duration_ms: int | None = end_ev.get("duration_ms")
     else:
-        print("  ended    : no session.end recorded")
+        result = "in-progress"
+        duration_ms = None
 
-    print()
-    print("## Steps")
-
+    # Collect steps
     skills_seen: list[str] = []
     gates: list[str] = []
     errors: list[str] = []
+    steps: list[dict[str, Any]] = []
 
     for ev in events:
         etype = ev.get("type")
         if etype == "skill.invoke":
             skill_name = ev.get("skill", "unknown")
-            result = ev.get("result", "")
-            # Find the matching complete event
             skills_seen.append(skill_name)
+            steps.append({"type": "skill", "skill": skill_name, "action": "invoke", "result": None})
+        elif etype == "skill.complete":
+            skill_name = ev.get("skill", "unknown")
+            step_result = ev.get("result", "?")
+            # Update the matching invoke step
+            for step in reversed(steps):
+                if step.get("type") == "skill" and step.get("skill") == skill_name and step.get("result") is None:
+                    step["result"] = step_result
+                    step["duration_ms"] = ev.get("duration_ms")
+                    break
         elif etype == "gate.hit":
-            gates.append(ev["data"].get("gate_name", "unknown"))
+            gate_name = ev["data"].get("gate_name", "unknown")
+            gates.append(gate_name)
+            steps.append({"type": "gate", "skill": None, "action": gate_name, "result": "gate"})
         elif etype == "error":
-            errors.append(ev["data"].get("message", "unknown"))
+            msg = ev["data"].get("message", "unknown")
+            errors.append(msg)
+            steps.append({"type": "error", "skill": None, "action": msg, "result": "fail"})
+        elif etype == "note":
+            text = ev.get("data", {}).get("text", "")
+            steps.append({"type": "note", "skill": None, "action": text, "result": None})
 
-    for i, skill_name in enumerate(skills_seen, 1):
-        # Find result from skill.complete event
-        complete_ev = next(
-            (
-                e
-                for e in events
-                if e.get("type") == "skill.complete" and e.get("skill") == skill_name
-            ),
-            None,
-        )
-        step_result = complete_ev.get("result", "?") if complete_ev else "pending"
-        print(f"  {i:2}. {skill_name:<40} [{step_result}]")
+    # Build narrative following the spec template:
+    # "Composer <C> targeting <T> started at <ts>. <N> atomic skills ran (<list>).
+    #  <K> gates hit. <Result> in <duration_ms>ms."
+    started_short = started_at[:19].replace("T", " ") if started_at else "unknown"
+    skill_list = ", ".join(sorted(set(skills_seen))) if skills_seen else "none"
+    n_skills = len(skills_seen)
 
-    if not skills_seen:
-        # No skill.invoke events — just list other notable events
+    if end_ev and duration_ms is not None:
+        ending = f"{result} in {duration_ms}ms."
+    elif end_ev:
+        ending = f"{result}."
+    else:
+        ending = "still running (no session.end recorded)."
+
+    error_clause = ""
+    if result == "fail" and errors:
+        error_clause = f" Errors: {'; '.join(errors[:3])}."
+
+    narrative = (
+        f"Composer {composer} targeting {target} started at {started_short}. "
+        f"{n_skills} atomic skill(s) ran ({skill_list}). "
+        f"{len(gates)} gate(s) hit. "
+        f"{ending}"
+        f"{error_clause}"
+    )
+
+    return {
+        "session": sid,
+        "composer": composer,
+        "target": target,
+        "result": result,
+        "started_at": started_at,
+        "duration_ms": duration_ms,
+        "narrative": narrative,
+        "steps": steps,
+    }
+
+
+def _render_replay(sid: str, events: list[dict[str, Any]], *, as_json: bool = False) -> None:
+    """Print a narrative replay of a session to stdout."""
+    data = _build_replay_data(sid, events)
+
+    if as_json:
+        print(jsonlib.dumps(data, separators=(",", ":"), ensure_ascii=False))
+        return
+
+    # Human-readable output
+    end_ev = next((e for e in events if e.get("type") == "session.end"), None)
+    started_short = data["started_at"][:19].replace("T", " ") if data["started_at"] else "unknown"
+
+    print(f"# Session replay: {sid}")
+    print(f"  composer : {data['composer']}")
+    print(f"  target   : {data['target']}")
+    print(f"  started  : {started_short}")
+
+    if end_ev:
+        ended_at = end_ev.get("ts", "unknown")[:19].replace("T", " ")
+        print(f"  ended    : {ended_at}")
+        if data["duration_ms"] is not None:
+            print(f"  duration : {data['duration_ms']} ms")
+        print(f"  result   : {data['result']}")
+    else:
+        print("  ended    : no session.end recorded")
+
+    print()
+    print("## Narrative")
+    print(f"  {data['narrative']}")
+
+    print()
+    print("## Steps")
+
+    skill_steps = [s for s in data["steps"] if s["type"] == "skill"]
+    if skill_steps:
+        for i, step in enumerate(skill_steps, 1):
+            step_result = step.get("result") or "pending"
+            print(f"  {i:2}. {step['skill']:<40} [{step_result}]")
+    else:
+        # No skill.invoke events — list other notable events
         non_session = [e for e in events if e.get("type") not in ("session.start", "session.end")]
         for ev in non_session:
             _print_human(ev)
 
-    if gates:
+    gate_steps = [s for s in data["steps"] if s["type"] == "gate"]
+    if gate_steps:
         print()
         print("## Gates hit")
-        for g in gates:
-            print(f"  - {g}")
+        for step in gate_steps:
+            print(f"  - {step['action']}")
 
-    if errors:
+    error_steps = [s for s in data["steps"] if s["type"] == "error"]
+    if error_steps:
         print()
         print("## Errors")
-        for err in errors:
-            print(f"  - {err}")
-
-    # Narrative summary sentence
-    print()
-    if end_ev:
-        result = end_ev.get("result", "unknown")
-        print(
-            f"Session {sid[:12]}... ran {len(skills_seen)} skill(s) "
-            f"with {len(gates)} gate(s) and {len(errors)} error(s); "
-            f"result={result}."
-        )
-    else:
-        print(
-            f"Session {sid[:12]}... ran {len(skills_seen)} skill(s) "
-            f"with {len(gates)} gate(s) and {len(errors)} error(s); "
-            f"no session.end recorded."
-        )
+        for step in error_steps:
+            print(f"  - {step['action']}")
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +584,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # note
     p_note = sub.add_parser("note", help="Append a manual note event")
     p_note.add_argument("text", help="Note text to append")
+    p_note.add_argument("--json", action="store_true", help='Emit {"action":"noted","session":"<id>"}')
 
     # replay
     p_replay = sub.add_parser("replay", help="Render narrative summary of a session")
@@ -530,6 +592,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "session_id", nargs="?", default="last",
         metavar="ID", help="Session ULID or 'last' (default: last)"
     )
+    p_replay.add_argument("--json", action="store_true", help='Emit {"narrative":"...","steps":[...]}')
 
     # sessions
     p_sessions = sub.add_parser("sessions", help="List sessions from cross-project index")
