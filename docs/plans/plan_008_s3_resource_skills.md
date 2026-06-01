@@ -550,6 +550,41 @@ In Skill 3's script body, line: `action = "created" if not infra.neon.project_id
 
 ---
 
+### Pass 1 (2026-06-01) — code review
+
+**Reviewer:** Reviewer agent
+**Verdict:** accepted
+
+**Tests:** 192/192 passing (`uv run --with pytest --with pydantic --with httpx --with hcloud --with pyyaml pytest tests/ -v`). No failures.
+
+**Ruff:** The 5 new skill scripts and `tests/skills/test_resource_skills.py` are clean (`ruff check` on those paths only: `All checks passed!`). The 12 F541 violations ruff reports when scanning the full `skills/` tree are all in pre-existing files (`awf-create-project`, `awf-setup-gsc`, `awf-update-template`) and pre-date this branch. Not in scope for this PR.
+
+**5 skill dirs present with SKILL.md + scripts:** confirmed — `awf-cf-dns-record`, `awf-hetzner-server`, `awf-neon-branch`, `awf-neon-project`, `awf-shared-infra-get` all have both files.
+
+**Passport `cloudflare` field:** `lib/passport.py` line 80 adds `cloudflare: dict = field(default_factory=dict)`. The `_from_dict` filter at line 195 picks it up via `known` fields automatically. Old passports without the key load cleanly (default empty dict). 5 dedicated round-trip tests in `TestPassportCloudflareField` confirm all variants.
+
+**Phase D Hetzner pricing TODO:** present at `hetzner_server.py` line 48 — `# TODO(phase-D): call Hetzner /server_types API for live pricing; see plan_008`. References the API action and plan number; sufficient for a Phase D author to locate without archaeology.
+
+**`awf-cf-dns-record` SKILL.md `--content` note:** line 29 states `For A records, typically the play server IP from awf-shared-infra-get output (play_server.ip)`. Requirement met.
+
+**`awf-neon-project` `before_id` capture:** `before_id = infra.neon.project_id` is captured at line 81, before the `nc.projects.get_or_create()` call at line 83. Action determination uses `before_id` at line 93: `"created" if not before_id else "updated"`. The plan-pseudocode bug is correctly fixed in the implementation.
+
+**`log.session` + `log.invoke` wrapping:** all 5 scripts wrap their mutation body inside `with log.session(...): with log.invoke(...):`. The pre-session `find_project_root()` call (or equivalent) sits outside the session context, consistent with plan_004 lesson M1.
+
+**No double `api.call` emission:** skill scripts contain no direct `log.api_call` / `log.state_change` calls. All API and state events are emitted exclusively through `lib` (NeonClient, HetznerClient, `lib/state.py`). No double-emission possible.
+
+**Idempotency / skip:** all 5 scripts set `action = "skip"` on second invocation and gate `.save()` behind the `action != "skip"` branch. Zero `state.change` events are emitted on a skip run because `state_change` is only called from `_emit_state_change` inside `lib/state.py:Infra.save()` / `Passport.save()`.
+
+**Exit code tables:** consistent across all 5 SKILL.md files. `awf-shared-infra-get` correctly omits exit code 1 (no project anchor required) and documents the omission inline.
+
+**Observation (non-blocking):** In `cf_dns_record.py`, idempotency is checked against the passport cache (whether the record ID is already stored in `passport.cloudflare`), not against a live Cloudflare lookup. If a record was created externally and the key is absent from the passport cache, the skill will call `create_dns_record()` (which returns the existing record via search-before-create in lib), record its ID, and emit `action = "created"` even though nothing was actually created remotely. This is consistent with how all other skills in this plan treat the action field (action reflects the passport state transition, not the remote state). Not a bug; noted for documentation awareness.
+
+**Blockers:** 0
+**Majors:** 0
+**Minors:** 0
+
+---
+
 ## Status log
 
 | Date | Status | Actor | Note |
@@ -557,3 +592,4 @@ In Skill 3's script body, line: `action = "created" if not infra.neon.project_id
 | 2026-06-01 | draft | Lead | Initial plan created; encodes plan-004/005/006/007 lessons; defines five atomic resource skills for Phase B. |
 | 2026-06-01 | review-approved | Reviewer | Pass 1: T1 (DNS in passport) approved; T2 (hardcoded costs) approved with Phase D TODO-comment condition; T3 (`extra="allow"` approach) approved with blocking condition — `lib/passport.py` must add explicit `cloudflare` field before skill 5 is implemented; T4 (literal --content) approved with SKILL.md wording advisory. Implementation note on neon-project action-determination bug in pseudocode. Skills 1–4 unblocked; skill 5 gated on passport patch. |
 | 2026-06-01 | implemented | Dev | All five skills landed. T2: TODO comment added at cost table in hetzner_server.py. T3: `cloudflare: dict = field(default_factory=dict)` added to `lib/passport.py`; `_from_dict` picks it up via `known` fields filter; 5 passport round-trip tests added. T4: SKILL.md for awf-cf-dns-record notes `--content` is typically the play server IP from `awf-shared-infra-get`. Reviewer action-determination bug fixed: `before_id` captured before lib call in neon_project.py. 40 new tests; full suite 192 passing; ruff clean. |
+| 2026-06-01 | accepted | Reviewer | Code review Pass 1: 192/192 tests green; new skill files ruff-clean; all 4 plan-review conditions verified in implementation; 0 Blockers, 0 Majors, 0 Minors. |
