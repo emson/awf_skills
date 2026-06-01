@@ -1,6 +1,6 @@
 # Plan 012 — `awf-status` rebuild (canonical "where am I")
 
-**Status:** implemented
+**Status:** accepted
 **Phase:** C
 **Spec refs:** [`spec.md` § C2](../spec.md), [`decisions.md` D-007](../decisions.md#d-007), [`07-multi-stage-architecture.md`](../07-multi-stage-architecture.md), [`08-logging.md`](../08-logging.md)
 **Owner (current):** Reviewer
@@ -14,6 +14,7 @@
 | 2026-06-01 | draft | Lead | Initial plan. Replaces existing `skills/awf-status/`. Ships C-phase canonical "where am I" surface with fixed-order output (Project/Stage/Drift/Recent/Next), drift detection v1 across CF zone + Hetzner servers + Neon project+branch, `--json` and `--verbose`. Encodes plan_005–011 lessons (subprocess tests, atomic skill anatomy, JSON parity, hard-reject outside project where appropriate, lib I/O ownership, DRY tail via `lib.log.tail_events`). |
 | 2026-06-01 | reviewed | Reviewer | Pass 1 complete. All five tensions resolved. No blocks. Ready for implementation. |
 | 2026-06-01 | implemented | Dev | Full rebuild shipped. `skills/awf-status/scripts/status.py` replaces `check.py`; `SKILL.md` updated with LLM directive. `STATUS_JSON_SCHEMA` added to `lib/state.py`. Drift v1: CF zone + Hetzner servers + Neon project+branch, all degrade to unknown on missing creds or provider exception. Idle detection (>90 days since session.end). `--json` validates against schema. 45 new tests; full suite 362/362 green. ruff clean; mypy pre-existing error in lib/state.py:113 is not new. |
+| 2026-06-01 | accepted | Reviewer | Code review Pass 1 complete. 0 Blockers, 0 Majors. 3 Advisories (stale mypy ignore, redundant find_project_root in _check_cloudflare, no explicit corrupt-anchor test). All plan_012 ACs verified. |
 
 ## Goal
 
@@ -828,3 +829,51 @@ non-zero exit outside of the documented codes. **No change to plan.**
    signature shows `load()` raising `ProjectNotFound` by default;
    confirm `optional=True` is the agreed keyword (vs `strict=False`
    or similar) before implementation step 2 reaches that call site.
+
+---
+
+## Code reviews
+
+### Pass 1 (2026-06-01) — code review
+
+**Reviewer:** Reviewer
+**Branch verified:** `feat/plan-012-awf-status-rebuild`
+**Verdict:** accepted
+
+**Checks run.**
+
+- `git diff main...HEAD --stat`: 5 files changed, 3 008 insertions, 371 deletions — scope matches plan_012 (plan doc, `lib/state.py`, `skills/awf-status/SKILL.md`, `skills/awf-status/scripts/status.py`, `tests/skills/test_awf_status.py`).
+- `pytest tests/ -v`: 362 collected, 359 passed, 3 skipped — skips are `TestJsonSchema::test_{no_project,project,drift}_output_validates`, all guarded by `pytest.skip("jsonschema not installed")`. The skip logic is correct soft-dependency handling; the schema-parsing test (`test_schema_parses`) runs unconditionally and confirms `STATUS_JSON_SCHEMA` is valid JSON.
+- `ruff check skills/awf-status/ lib/state.py tests/skills/test_awf_status.py`: clean.
+- `mypy --strict lib/state.py`: one error, `lib/state.py:113: error: Unused "type: ignore" comment [unused-ignore]`. Confirmed identical on `main` — pre-existing; not introduced by this branch. (The planning Pass 1 note about "pre-existing line 113 error OK" applies; the error category changed from `[attr-defined]` to `[unused-ignore]` as `lib.log` graduated from absent to present, but the approved location is the same.)
+
+**Checklist sweep.**
+
+| Item | Result |
+|------|--------|
+| All plan_012 ACs verified by tests | Pass — 45 tests, all ACs listed on pp. 396–403 have at least one covering test. |
+| D-007 fixed-order output | Pass — `test_basic_project_output_order` asserts `Project < Stage < Drift < Recent < Next` by index. |
+| No project → "Stage: none" + help suggestion, exit 0 | Pass — `render_no_project_human()` emits `Stage: none` + `/awf-help` hint; `test_no_project_exits_0` and `test_no_project_prints_stage_none` pass. |
+| Drift v1: CF zone + Hetzner servers + Neon project/branch | Pass — three check functions with full missing/unknown/exception paths; all six drift provider × outcome combinations tested. |
+| Missing credentials → "unknown" in drift (not error) | Pass — `test_cf_missing_credentials_world_unknown`, `test_hetzner_no_creds_world_unknown`, `test_neon_no_creds_world_unknown`. |
+| `--json` validates against schema | Pass (conditional) — `TestJsonSchema::test_schema_parses` always runs; three validation tests run when `jsonschema` is installed. |
+| `--verbose` extends events 5→20 + per-provider details | Pass — `test_verbose_extends_event_tail` and `test_verbose_details_block`. |
+| `Recent:` uses `lib.log.tail_events` (DRY) | Pass — `test_recent_block_uses_tail_events` grep-asserts the import at line 39. |
+| LLM-directive line in SKILL.md | Pass — "Run this first when location is uncertain." in `description:` field and in `**LLM directive:**` body. |
+| Stage→composer map for `Next:` line | Pass — `NEXT_COMPOSERS` constant; `test_next_composer_for_stage` parametrised across all five stages; `test_scale_stage_terminal_hint` confirms `None` at terminal. |
+| Idle detection at 90 days | Pass — `check_idle()` with boundary tests at 89, 90 (not idle), 91 days (idle). |
+| Corrupt anchor propagates | Pass — code intentionally does not catch `StateCorruptError`/`StateValidationError` per T5 decision; SKILL.md documents traceback behaviour under "Note" after exit-code table. The planning Pass 1 accepted propagate as the correct posture. |
+| Old `check.py` deleted | Pass — `ls skills/awf-status/scripts/` shows only `status.py`. |
+| `STATUS_JSON_SCHEMA` constant in `lib/state.py` | Pass — at line 590. |
+| ruff clean | Pass. |
+| Coding/testing principles upheld | Pass — direct `main()` calls with monkeypatching; no subprocess round-trips; each test class targets one behaviour; no premature abstraction. `SUGGEST` dict (T3 advisory) is present as a module constant. |
+
+**Advisories (non-blocking, no action required before merge).**
+
+1. **A1 — Stale `type: ignore` comment** (`lib/state.py:113`). The `# type: ignore[attr-defined]` suppress was correct when `lib.log` was absent; now that it exists the comment is stale. This is pre-existing on `main` and is not introduced by this branch. A future hygiene pass should either remove the comment (if `lib.log` is now always present) or convert it to a conditional import with `TYPE_CHECKING`. Raise with the lib/state.py owner.
+
+2. **A2 — Redundant `find_project_root` call inside `_check_cloudflare`** (`status.py:155–164`). The function re-derives the project root from `anchor._path.parent.parent` to read `passport.json`, which is the same computation that `main()` does at line 849. The duplication is harmless (both paths reach the same directory) but `_check_cloudflare`'s try/except swallows any failure, so if the path derivation ever diverged the silent fallback would mask the bug. A future refactor could pass `root: Path` into `_check_cloudflare` as a parameter, matching the explicit root derivation in `main()`. Low priority.
+
+3. **A3 — No explicit test for corrupt-anchor exit behaviour**. The plan's T5 decision (propagate as unhandled exception, exit 1 from Python runtime) is correctly implemented but has no test asserting it. The planning Pass 1 accepted this posture; a future test using `pytest.raises(ValidationError)` or a subprocess call with a malformed `project.json` would pin the contract. Deferrable to a maintenance pass.
+
+**Summary.** Implementation faithfully delivers all plan_012 ACs. The three advisories are hygiene items that do not affect correctness or user-visible behaviour. No Blockers. No Majors.
