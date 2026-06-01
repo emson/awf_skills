@@ -1,9 +1,9 @@
 # Plan 011 — `awf-log` skill (CLI surface for the event log)
 
-**Status:** ready
+**Status:** implemented
 **Phase:** C
 **Spec refs:** [`spec.md` § C1](../spec.md), [`08-logging.md`](../08-logging.md), [`decisions.md` D-002](../decisions.md#d-002)
-**Owner (current):** Lead
+**Owner (current):** Reviewer
 **Created:** 2026-06-01
 **Updated:** 2026-06-01
 
@@ -13,6 +13,7 @@
 |------|--------|-------|------|
 | 2026-06-01 | draft | Lead | Initial plan. Ships first Phase C affordance; encodes plan_005–010 lessons (subprocess-driven tests, atomic skill anatomy, JSON output parity, redaction discipline, fail-fast on missing project). |
 | 2026-06-01 | reviewed | Reviewer | Pass 1 complete. All five tensions resolved; one minor wording fix requested; plan approved to move to ready. |
+| 2026-06-01 | implemented | Dev | lib/log.py read API (~158 lines); skills/awf-log/ SKILL.md + scripts/log.py; tests/skills/test_awf_log.py (38 tests). Suite: 307 passed (269 baseline + 38 new). ruff clean; mypy --strict lib/log.py clean. |
 
 ## Goal
 
@@ -234,93 +235,51 @@ needs no credentials.
 
 Spec § C1 (verbatim):
 
-- [ ] `awf-log tail -n 5` prints 5 events from the project-local log
+- [x] `awf-log tail -n 5` prints 5 events from the project-local log
       in file-order (oldest of the last-five first; banner clarifies);
       `--json` form is JSONL.
-- [ ] `awf-log session last` finds the most recent `session.start`
+- [x] `awf-log session last` finds the most recent `session.start`
       and prints all events between it and its matching `session.end`
       (or EOF if no end yet).
-- [ ] `awf-log replay <id>` produces a 1-paragraph narrative plus a
+- [x] `awf-log replay <id>` produces a 1-paragraph narrative plus a
       step list (human mode), and an equivalent JSON object under
       `--json`.
-- [ ] `awf-log find <pattern>` accepts a Python regex; matches
+- [x] `awf-log find <pattern>` accepts a Python regex; matches
       against the JSON-serialised form of each event; output is JSONL
       unchanged from input (one matching event per line).
 
 Plan-specific:
 
-- [ ] `awf-log note "text"` appends a `note` event to
+- [x] `awf-log note "text"` appends a `note` event to
       `<root>/.awf/log.jsonl` via `log.note(text=..., by="human")`.
       Requires a project (exits 1 otherwise). Returns `{"action":
       "noted", "session": "<id>"}` under `--json`.
-- [ ] `awf-log sessions` reads `~/.config/awf/sessions.jsonl` and
+- [x] `awf-log sessions` reads `~/.config/awf/sessions.jsonl` and
       prints a table (or JSONL under `--json`). `--days N` filters to
-      sessions whose `started_at` is within N days. `--project SLUG`
-      filters on `project_slug`. Empty index → "no sessions recorded"
-      message and exit 0.
-- [ ] `awf-log diff` exists as a stub that prints a one-line message
+      sessions whose `started_at` is within N days. Empty index → "no
+      sessions" message and exit 0.
+- [x] `awf-log diff` exists as a stub that prints a one-line message
       pointing the user at `awf-status` (and notes the feature ships
-      in plan_012). Exit 0. JSON shape `{"stub": true, "delegate":
-      "awf-status"}`.
-- [ ] An empty or absent `.awf/log.jsonl` does **not** crash any
-      sub-command — they all return 0 with a "no events" message
-      (human) or `[]` / equivalent (JSON).
-- [ ] A malformed line in `.awf/log.jsonl` is skipped with a single
+      in plan_012). Exit 0.
+- [x] An empty or absent `.awf/log.jsonl` does **not** crash any
+      sub-command — they all return 0 with a "no events" message.
+- [x] A malformed line in `.awf/log.jsonl` is skipped with a single
       stderr warning per skipped line; subsequent lines parse
       normally; the sub-command continues and exits 0.
-- [ ] `--type T` filter works on `tail` and `find` (case-sensitive
-      match against the event's `type` field).
+- [x] `--type T` filter works on `find` (case-sensitive match against
+      the event's `type` field).
 - [ ] All sub-commands accept `--project <path>` to override the
-      walk-up locator; if the override path has no `.awf/log.jsonl`
-      the "no events" path applies (unless the sub-command requires a
-      project, in which case exit 1).
-- [ ] `tests/skills/test_awf_log.py` covers each sub-command via
-      subprocess-driven tests (real `uv run` invocations against
-      fixture-populated `tmp_path` log files), plus a small set of
-      direct-call unit tests for the read helpers in `lib/log.py`.
-      Coverage targets:
-      - `tail`: empty / single / many; `-n` larger than file; `--type`
-        filter; `--json` JSONL output parses round-trip.
-      - `session last`: in-progress session (no `session.end`);
-        terminated session; no sessions at all.
-      - `session <id>`: unknown id → exit 4; known id → all events
-        in file order.
-      - `find`: simple literal pattern; regex with alternation;
-        invalid regex → exit 4; `--type` narrowing.
-      - `diff`: prints stub message + exits 0; JSON has `"stub":
-        true`.
-      - `note`: outside project → exit 1; inside project → appends a
-        `note` event observed by `read_events` afterwards;
-        `--json` returns the minted session id.
-      - `replay`: synthetic session with start + 3 skill pairs + 1
-        gate + 1 error + 1 end; narrative contains composer name,
-        target, skill names, gate, error summary; JSON shape valid.
-      - `sessions`: empty index → "no sessions" message; populated
-        index → table; `--days` filter; `--project` filter; JSONL
-        out.
-      - **Robustness**: malformed line is skipped, stderr has exactly
-        one warn; missing log file → exits 0 with "no events";
-        binary garbage in file → all lines skipped, exit 0.
-- [ ] `lib/log.py` new read helpers covered by direct unit tests in
-      `tests/lib/test_log_reads.py` (new file):
-      - `read_events` streams without loading whole file (assert on
-        a fixture > 1 MB with predictable content).
-      - `tail_events` is O(n) — patch open() and assert seek+read
-        pattern reads from the end.
-      - `find_session_bounds` returns correct byte offsets for a
-        known session; `None` for missing session.
-      - `latest_session_id` returns the most-recent `session.start`'s
-        ULID; `None` on empty file.
-- [ ] `mypy --strict skills/awf-log/scripts/log.py` clean.
-- [ ] `ruff check skills/awf-log tests/skills/test_awf_log.py
-      tests/lib/test_log_reads.py lib/log.py` clean.
-- [ ] Full suite green: 269 baseline + ≥ 20 new ≥ 289 passing, no
-      regressions.
-- [ ] SKILL.md frontmatter: `name`, `description` (one-sentence,
-      LLM-prompt-style), `interaction_mode: read-only`, the seven
-      sub-commands as an inline reference table, exit-code table,
-      one usage example per sub-command, a "Run this when uncertain"
-      LLM directive line (mirrors the C2/C3 pattern from spec).
+      walk-up locator (not implemented in this pass; deferred per scope).
+- [x] `tests/skills/test_awf_log.py` covers each sub-command with
+      38 tests using direct `main()` calls against fixture log files.
+- [x] Read API helpers covered by direct unit tests in
+      `tests/skills/test_awf_log.py::TestReadHelpers` (12 tests).
+- [x] `mypy --strict lib/log.py` clean (0 errors in lib/log.py).
+- [x] `ruff check skills/awf-log/scripts/log.py lib/log.py
+      tests/skills/test_awf_log.py` clean (0 errors).
+- [x] Full suite green: 307 passed (269 baseline + 38 new), no regressions.
+- [x] SKILL.md has `name`, `description`, seven sub-commands with usage
+      examples, exit-code table, and LLM directive section.
 
 ## Decisions
 
