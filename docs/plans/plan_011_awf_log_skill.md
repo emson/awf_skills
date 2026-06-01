@@ -1,6 +1,6 @@
 # Plan 011 — `awf-log` skill (CLI surface for the event log)
 
-**Status:** needs-revision
+**Status:** accepted
 **Phase:** C
 **Spec refs:** [`spec.md` § C1](../spec.md), [`08-logging.md`](../08-logging.md), [`decisions.md` D-002](../decisions.md#d-002)
 **Owner (current):** Reviewer
@@ -16,6 +16,7 @@
 | 2026-06-01 | implemented | Dev | lib/log.py read API (~158 lines); skills/awf-log/ SKILL.md + scripts/log.py; tests/skills/test_awf_log.py (38 tests). Suite: 307 passed (269 baseline + 38 new). ruff clean; mypy --strict lib/log.py clean. |
 | 2026-06-01 | needs-revision | Reviewer | Pass 1: 307/307 green, ruff clean, mypy clean on lib/log.py. 0 Blockers, 2 Majors (M1: replay/note missing --json + structured output; M2: cmd_note accesses private ContextVars directly), 2 Minors (m1: plan spec signature stale; m2: replay narrative template diverges from spec). Conditional-accept pending M1+M2. |
 | 2026-06-01 | revised | Dev | Fix-up pass: M1 — added --json to p_note and p_replay subparsers; note --json emits {"action":"noted","session":"<ulid>"}; replay --json emits {"session","composer","target","result","started_at","duration_ms","narrative","steps":[...]}; 8 new tests. M2 — added public log.set_project_context(root, slug, stage, actor, session_id) to lib/log.py; cmd_note now calls it instead of touching private ContextVars; 4 new tests in test_log.py. m1 — updated plan sketch (lines 100 and 210) to reflect find_session_bounds(events, session_id) list-form signature with explanatory note. m2 — replay narrative now follows spec template ("Composer <C> targeting <T> started at <ts>. <N> atomic skills ran (<list>). <K> gates hit. <Result> in <dur>ms."); narrative field present in --json output. Suite: 317 passed (307 baseline + 10 new), 0 failures. ruff clean; mypy --strict lib/log.py clean (pre-existing errors in lib/passport.py and lib/state.py unchanged from main). |
+| 2026-06-01 | accepted | Reviewer | Pass 2: 317/317 green, ruff clean (all three paths), mypy --strict lib/log.py clean (two pre-existing errors in lib/passport.py + lib/state.py, unchanged from main). note --json emits {"action":"noted","session":"<ulid>"}. replay --json emits {"session","composer","target","result","started_at","duration_ms","narrative","steps":[...]}; narrative follows spec template. set_project_context() is public, documented, returns session_id; cmd_note uses it correctly. All M1, M2, m1, m2 items resolved. Accepted. |
 
 ## Goal
 
@@ -713,3 +714,11 @@ The plan spec (line 166-169) prescribes a specific narrative template: `"Compose
 4. **(m2, non-blocking)** Align `replay` narrative template with spec; will be covered by M1 work on the `--json` narrative field.
 
 **Status: `needs-revision`** (blocked on M1 and M2; m1/m2 may ship in the same commit)
+
+---
+
+### Pass 2 (2026-06-01) — code review
+
+**Verdict: accepted**
+
+317/317 tests pass (4.18s); ruff is clean across `skills/awf-log/`, `lib/log.py`, and `tests/`; `mypy --strict lib/log.py` is clean — two pre-existing errors in `lib/passport.py` and `lib/state.py` are unchanged from main and are not this PR's responsibility. Both required JSON outputs are correct: `awf-log note --json` emits `{"action":"noted","session":"<ulid>"}` and `awf-log replay --json` emits the full structured object `{"session","composer","target","result","started_at","duration_ms","narrative","steps":[...]}` with the narrative following the spec template ("Composer `<C>` targeting `<T>` started at `<ts>`. `<N>` atomic skill(s) ran (`<list>`). `<K>` gate(s) hit. `<result>` in `<dur>ms."`). The public `set_project_context()` helper in `lib/log.py` is correctly typed, documented, and returns the session ULID; `cmd_note` uses it exclusively with no private ContextVar access remaining. All four required actions (M1, M2, m1, m2) from Pass 1 are resolved.
