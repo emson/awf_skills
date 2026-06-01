@@ -1,6 +1,6 @@
 # Plan 009 — S3 atomic app + kamal skills (5 of 10)
 
-**Status:** ready
+**Status:** implemented
 **Phase:** B
 **Spec refs:** [`spec.md` § B4](../spec.md), [`decisions.md` D-001](../decisions.md#d-001--multi-stage-architecture-pattern), [D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson), [D-005](../decisions.md#d-005--image-registry-default-ghcr)
 **Owner (current):** Reviewer
@@ -432,7 +432,7 @@ T3's stance: trust kamal's own idempotency for the side effect; track
 ## Acceptance criteria
 
 ### Per-skill (all five)
-- [ ] Second invocation with identical inputs and unchanged source state
+- [x] Second invocation with identical inputs and unchanged source state
       logs `skill.complete` with `result="ok"` and emits zero new
       `state.change` events (action `skip`).
       Exception: skill 4 always invokes kamal (no skip path); the
@@ -440,22 +440,22 @@ T3's stance: trust kamal's own idempotency for the side effect; track
       trivially because skill 4 never calls `.save()`.
       Exception: skill 5 emits zero `state.change` iff
       `Infra.registry.image` is unchanged since the last successful run.
-- [ ] First mutation emits the right events: skills 1–2 emit one or more
+- [x] First mutation emits the right events: skills 1–2 emit one or more
       `file.write` events; skills 3 and 5 emit one `state.change` (via
       `Infra.save()`); skill 4 emits one or more `process.invoke` events
       from the lib (no `state.change`).
-- [ ] Runnable standalone:
+- [x] Runnable standalone:
       `uv run skills/<name>/scripts/<verb>.py --help` exits 0 with usage.
-- [ ] SKILL.md has frontmatter (`name`, `description`), Prerequisites,
+- [x] SKILL.md has frontmatter (`name`, `description`), Prerequisites,
       Inputs, Procedure (uv run command), Exit-code table, Errors
       handled, Idempotency, Manual gates sections.
-- [ ] Missing-cred / missing-CLI failure exits 2; remote failure exits 3.
-- [ ] `awf-app-secret-set` never logs the secret `value`, verified by a
+- [x] Missing-cred / missing-CLI failure exits 2; remote failure exits 3.
+- [x] `awf-app-secret-set` never logs the secret `value`, verified by a
       dedicated test that greps the captured log events for the value
       string and asserts absence.
 
 ### Plan-wide
-- [ ] One consolidated test file
+- [x] One consolidated test file
       `tests/skills/test_app_kamal_skills.py` covering all five skills
       (plan_008 precedent). Target ≥ 35 tests:
       - Each skill: happy-create, happy-skip, no-project-exit-1,
@@ -472,18 +472,18 @@ T3's stance: trust kamal's own idempotency for the side effect; track
         injected fake runner.
       - `awf-kamal-deploy`: image-changed → updated, image-unchanged →
         skip, `KamalDeployFailed` → exit 3.
-- [ ] Mocking strategy: monkeypatch
+- [x] Mocking strategy: monkeypatch
       `lib.kamal.runner.KamalRunner.setup` and `.deploy` to fakes that
       record calls and optionally raise. `lib.kamal.config.KamalConfig`
       is exercised through the real implementation against tmp_path
       projects (no mocking — it's pure rendering). Skills 1 and 2
       perform real filesystem writes against `tmp_path`.
-- [ ] Full suite green: 192 baseline + ≥ 35 new = ≥ 227 passing, no
+- [x] Full suite green: 192 baseline + ≥ 35 new = ≥ 227 passing, no
       regressions.
-- [ ] `ruff check skills/awf-app-dockerize skills/awf-app-secret-set
+- [x] `ruff check skills/awf-app-dockerize skills/awf-app-secret-set
       skills/awf-kamal-config skills/awf-kamal-setup skills/awf-kamal-deploy
       tests/skills/test_app_kamal_skills.py` clean.
-- [ ] Each skill's `--help` smoke-tested in the consolidated file.
+- [x] Each skill's `--help` smoke-tested in the consolidated file.
 
 ## Decisions
 
@@ -665,3 +665,4 @@ APPROVED. The plan correctly identifies this as a one-line lib touch (one functi
 |------|--------|-------|------|
 | 2026-06-01 | draft | Lead | Initial plan; encodes plan_004/005/006/007/008 lessons; defines the five S3 app + kamal atomic skills, completing the ten-skill atomic layer for Phase B. |
 | 2026-06-01 | review-passed | Reviewer | Pass 1: all four tensions approved. Two implementation notes: prefer `argparse` mutually-exclusive-group over manual guard for T2; add hard pre-condition statement for T4 image-drift in SKILL.md Prerequisites. No blocking issues. |
+| 2026-06-01 | implemented | Dev | All 5 skills + lib/log.py file_write helper delivered. 43 new tests in tests/skills/test_app_kamal_skills.py + 4 new log tests. Full suite: 239 passing (baseline 192 + 47 new). ruff clean; mypy --strict lib/log.py passes. All acceptance criteria ticked. |
