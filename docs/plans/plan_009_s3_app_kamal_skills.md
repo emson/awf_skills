@@ -659,6 +659,38 @@ APPROVED. The plan correctly identifies this as a one-line lib touch (one functi
 
 ---
 
+### Pass 1 (2026-06-01) — code review
+
+**Reviewer:** Sonnet 4.6
+**Verdict: ACCEPTED**
+
+**Checks run:**
+
+- `git diff main...feat/plan-009-s3-app-kamal-skills --stat`: 14 files changed, 2679 insertions(+), 1 deletion(−). All five expected skill dirs present with SKILL.md + script.
+- `pytest tests/ -v`: 239/239 passed (3.25 s). No failures, no skips.
+- `uv run --with ruff ruff check <new files>`: All checks passed.
+- T1 drift behavior: `awf-app-dockerize` reads existing file content and, if it differs from the template, appends to `drift[]` and leaves the file untouched. No clobber. Confirmed.
+- T2 mutually-exclusive group: `awf-app-secret-set` uses `parser.add_mutually_exclusive_group(required=True)` with `--value`, `--from-env`, `--from-file`. Confirmed.
+- T4 prerequisite: `awf-kamal-deploy` SKILL.md Prerequisites section states "run awf-kamal-config first" as a hard pre-condition, with explicit explanation of the image-drift consequence. Confirmed.
+- T3 no gate: `awf-kamal-setup` has no `setup_done` gate; script always calls `runner.setup()`, `action` is invariant `"created"`. Confirmed.
+- `log.file_write`: added at `lib/log.py` line 733; follows the `log.process()` pattern (`_write_event(_build_record(...))` in a try/except-never-raises, increments `events_count`). 4 new tests cover emit, counter increment, extra kwargs, and never-raises. Confirmed.
+- All five scripts: `ProjectAnchor.load()` called before `with log.session(...)` open; body wrapped in `log.session` + `log.invoke`. Confirmed.
+- Exit code tables: SKILL.md tables consistent with script `return` statements for all five skills.
+
+**Findings:**
+
+| Severity | Location | Description |
+|----------|----------|-------------|
+| Minor | `skills/awf-kamal-config/scripts/kamal_config.py:79` | `return 2` (on `KamalError`) is inside the `with log.session` / `with log.invoke` block. Python's context-manager `else` branch fires on clean exit, so both `skill.complete` and `session.end` are emitted with `result="ok"` even though the script exits 2. Every other error return in the five scripts is either outside the `with` block (kamal-deploy, kamal-setup via `except` clauses) or before the `with` (project-not-found). Fix in next pass: re-raise as a local exception type and catch outside the `with`, or move the inner `try/except KamalError` outside the `with log.invoke` scope. |
+
+**Blockers:** 0
+**Majors:** 0
+**Minors:** 1 (see above)
+
+The branch is accepted. The Minor issue is tracked above; it can be addressed in a follow-up commit before plan_010 integration or at the start of the next pass — it does not affect correctness of the deployed artifacts or exit codes visible to the composer.
+
+---
+
 ## Status log
 
 | Date | Status | Actor | Note |
@@ -666,3 +698,4 @@ APPROVED. The plan correctly identifies this as a one-line lib touch (one functi
 | 2026-06-01 | draft | Lead | Initial plan; encodes plan_004/005/006/007/008 lessons; defines the five S3 app + kamal atomic skills, completing the ten-skill atomic layer for Phase B. |
 | 2026-06-01 | review-passed | Reviewer | Pass 1: all four tensions approved. Two implementation notes: prefer `argparse` mutually-exclusive-group over manual guard for T2; add hard pre-condition statement for T4 image-drift in SKILL.md Prerequisites. No blocking issues. |
 | 2026-06-01 | implemented | Dev | All 5 skills + lib/log.py file_write helper delivered. 43 new tests in tests/skills/test_app_kamal_skills.py + 4 new log tests. Full suite: 239 passing (baseline 192 + 47 new). ruff clean; mypy --strict lib/log.py passes. All acceptance criteria ticked. |
+| 2026-06-01 | accepted | Reviewer | Code review pass 1: 239/239 green, ruff clean, all five implementation checks passed. One Minor: kamal_config return-2 inside log.session emits result="ok"; no Blockers, no Majors. |
