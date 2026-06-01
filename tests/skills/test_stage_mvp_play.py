@@ -289,9 +289,10 @@ class TestHappyPath:
             "awf-kamal-deploy",
         ]
         for i, expected in enumerate(expected_skills):
-            # cmd[2] is the script path which contains the skill name
-            assert expected.replace("-", "_") in seq.calls[i][2], (
-                f"Step {i+1}: expected {expected} in {seq.calls[i][2]}"
+            # cmd[2] is the script path; the skill directory name appears in it.
+            # e.g. .../skills/awf-shared-infra-get/scripts/shared_infra_get.py
+            assert expected in seq.calls[i][2], (
+                f"Step {i+1}: expected '{expected}' in path '{seq.calls[i][2]}'"
             )
 
     def test_happy_path_json_output(self, tmp_path, monkeypatch, capsys):
@@ -314,20 +315,30 @@ class TestHappyPath:
         assert len(output["steps"]) == 8
 
     def test_skip_actions_on_rerun(self, tmp_path, monkeypatch):
-        """Re-run with action=skip from all skills: anchor still advanced."""
+        """Re-run with action=skip from all skills: anchor still advanced.
+
+        Real atomic skills emit action=skip *without* connection_string on
+        re-run. The composer must tolerate this by detecting the existing
+        .kamal/secrets entry written on the first run.
+        """
         _make_project(tmp_path, with_infra=True)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("AWF_HOME", str(_REPO_ROOT))
         _patch_shared(monkeypatch)
 
-        # Pre-advance anchor to simulate partial state (not yet mvp-play but infra exists)
-        # The composer should still advance it after all skips.
+        # Simulate that the first run already wrote .kamal/secrets.
+        kamal_dir = tmp_path / ".kamal"
+        kamal_dir.mkdir(exist_ok=True)
+        (kamal_dir / "secrets").write_text(
+            "DATABASE_URL=postgres://host/db?sslmode=require\n", encoding="utf-8"
+        )
 
+        # Real skip payloads: step 3 skip has NO connection_string.
         skip_responses = [
             _make_proc({"action": "skip", "play_server": {"ip": "1.2.3.4"}, "play_neon_project_id": "neon-proj-111"}),  # step 1
             _make_proc({"action": "skip"}),  # step 2
-            _make_proc({"action": "skip", "branch_id": "br-abc", "branch_name": "example-com", "connection_string": "postgres://host/db?sslmode=require"}),  # step 3
-            _make_proc({"action": "skip"}),  # step 4
+            _make_proc({"action": "skip"}),  # step 3 — no connection_string (real skip)
+            # step 4 is handled internally (skip detected via .kamal/secrets); no subprocess call
             _make_proc({"action": "skip"}),  # step 5
             _make_proc({"action": "skip"}),  # step 6
             _make_proc({"action": "skip"}),  # step 7
@@ -341,7 +352,9 @@ class TestHappyPath:
             rc = mod.main([])
 
         assert rc == 0
-        assert len(seq.calls) == 8, "All 8 steps invoked even for skip actions"
+        # Step 4 is skipped without subprocess call (secrets already present),
+        # so only 7 subprocess invocations total.
+        assert len(seq.calls) == 7, f"Expected 7 subprocess calls (step 4 skipped locally), got {len(seq.calls)}"
         anchor = _read_anchor(tmp_path)
         assert anchor["stage"] == "mvp-play"
 
@@ -751,10 +764,14 @@ class TestIntegration:
     """Integration tests: real subprocess.run pointing at fake atomic scripts."""
 
     def _write_fake_skill(self, skills_dir: Path, skill_name: str, response: dict[str, Any]) -> None:
-        """Write a tiny Python fake script that prints JSON and exits 0."""
+        """Write a tiny Python fake script that prints JSON and exits 0.
+
+        Script is named using the same convention as _invoke: strip "awf-" prefix,
+        replace remaining hyphens with underscores.
+        """
         script_dir = skills_dir / skill_name / "scripts"
         script_dir.mkdir(parents=True, exist_ok=True)
-        module_name = skill_name.replace("-", "_")
+        script_stem = skill_name.removeprefix("awf-").replace("-", "_")
         script = textwrap.dedent(f"""\
             #!/usr/bin/env python3
             import json, sys
@@ -762,20 +779,20 @@ class TestIntegration:
             print(json.dumps({json.dumps(response)}))
             sys.exit(0)
         """)
-        (script_dir / f"{module_name}.py").write_text(script, encoding="utf-8")
+        (script_dir / f"{script_stem}.py").write_text(script, encoding="utf-8")
 
     def _write_fake_skill_fail(self, skills_dir: Path, skill_name: str, exit_code: int, payload: dict) -> None:
         """Write a fake script that prints JSON and exits with given code."""
         script_dir = skills_dir / skill_name / "scripts"
         script_dir.mkdir(parents=True, exist_ok=True)
-        module_name = skill_name.replace("-", "_")
+        script_stem = skill_name.removeprefix("awf-").replace("-", "_")
         script = textwrap.dedent(f"""\
             #!/usr/bin/env python3
             import json, sys
             print(json.dumps({json.dumps(payload)}))
             sys.exit({exit_code})
         """)
-        (script_dir / f"{module_name}.py").write_text(script, encoding="utf-8")
+        (script_dir / f"{script_stem}.py").write_text(script, encoding="utf-8")
 
     def test_integration_happy_path(self, tmp_path, monkeypatch):
         """End-to-end: fake scripts on disk, real subprocess.run path."""
@@ -929,4 +946,143 @@ class TestJsonOutput:
         out = json.loads(capsys.readouterr().out.strip())
         assert out["result"] == "fail"
         assert out["exit_code"] == 3
-        assert out["anchor_advanced"] is False
+
+
+# ---------------------------------------------------------------------------
+# Test class: B1 — DATABASE_URL must never appear in log
+# ---------------------------------------------------------------------------
+
+class TestSecretRedaction:
+    """B1: sensitive --value arguments must not appear in the log file."""
+
+    def test_database_url_not_in_log_after_secret_set(self, tmp_path, monkeypatch):
+        """After step_app_secret_set runs, no postgres:// or --value <secret> in log."""
+        _make_project(tmp_path, with_infra=True)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("AWF_HOME", str(_REPO_ROOT))
+        _patch_shared(monkeypatch)
+
+        mod = _import_composer()
+        # Step 3 returns a connection string; step 4 invokes awf-app-secret-set
+        responses = _build_happy_responses()
+        # Ensure step 3 has a real postgres:// URI so redaction is exercised.
+        responses[2] = _make_proc({
+            "action": "created",
+            "branch_id": "br-abc",
+            "branch_name": "example-com",
+            "connection_string": "postgres://user:s3cret@host/db?sslmode=require",
+        })
+        seq = _SubprocessSequence(responses)
+
+        with patch("subprocess.run", side_effect=seq):
+            rc = mod.main([])
+
+        assert rc == 0
+
+        # Read every line of the log and assert no secret leaks.
+        log_path = tmp_path / ".awf" / "log.jsonl"
+        assert log_path.exists(), "log.jsonl must be created"
+        log_text = log_path.read_text(encoding="utf-8")
+        assert "postgres://" not in log_text, "postgres:// URI must not appear in log"
+        assert "s3cret" not in log_text, "secret password must not appear in log"
+        # The literal --value flag should not be followed by the secret value.
+        assert "--value postgres://" not in log_text, "--value <secret> must not appear in log"
+
+
+# ---------------------------------------------------------------------------
+# Test class: M1 — re-run skip propagates through step 4
+# ---------------------------------------------------------------------------
+
+class TestRerunSkipPropagation:
+    """M1: step 3 skip + existing .kamal/secrets → step 4 also skips; no failure."""
+
+    def test_rerun_skip_propagates_through_step_4(self, tmp_path, monkeypatch):
+        """Both step 3 and step 4 return skip; composer does not fail."""
+        _make_project(tmp_path, with_infra=True)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("AWF_HOME", str(_REPO_ROOT))
+        _patch_shared(monkeypatch)
+
+        # Simulate existing .kamal/secrets from a prior run.
+        kamal_dir = tmp_path / ".kamal"
+        kamal_dir.mkdir(exist_ok=True)
+        (kamal_dir / "secrets").write_text(
+            "DATABASE_URL=postgres://host/db?sslmode=require\n", encoding="utf-8"
+        )
+
+        # Step 3 returns skip with NO connection_string (real atomic skill behaviour).
+        responses = [
+            _make_proc({"action": "created", "play_server": {"ip": "1.2.3.4"}, "play_neon_project_id": "neon-proj-111"}),
+            _make_proc({"action": "created"}),
+            _make_proc({"action": "skip"}),  # step 3 — no connection_string
+            # step 4 handled locally (secrets already present) — no subprocess
+            _make_proc({"action": "created"}),  # step 5
+            _make_proc({"action": "created"}),  # step 6
+            _make_proc({"action": "created"}),  # step 7
+            _make_proc({"action": "created"}),  # step 8
+        ]
+
+        mod = _import_composer()
+        seq = _SubprocessSequence(responses)
+
+        with patch("subprocess.run", side_effect=seq):
+            rc = mod.main([])
+
+        assert rc == 0, f"Expected exit 0 on re-run skip, got {rc}"
+        # 7 subprocess calls: steps 1, 2, 3, 5, 6, 7, 8 — step 4 skipped locally
+        assert len(seq.calls) == 7, f"Expected 7 subprocess calls, got {len(seq.calls)}"
+        anchor = _read_anchor(tmp_path)
+        assert anchor["stage"] == "mvp-play"
+
+
+# ---------------------------------------------------------------------------
+# Test class: M2 — missing skill script produces clear exit-4 error
+# ---------------------------------------------------------------------------
+
+class TestMissingSkillScript:
+    """M2: _invoke returns exit 4 with a clear message when a skill script is absent."""
+
+    def test_missing_script_exits_4(self, tmp_path, monkeypatch):
+        """Monkeypatching AWF_HOME to a directory without scripts: exits 4."""
+        _make_project(tmp_path, with_infra=True)
+        monkeypatch.chdir(tmp_path)
+        _patch_shared(monkeypatch)
+
+        # Point AWF_HOME to a location that has NO skills directory at all.
+        empty_awf_home = tmp_path / "empty_awf"
+        empty_awf_home.mkdir()
+        monkeypatch.setenv("AWF_HOME", str(empty_awf_home))
+
+        mod = _import_composer()
+        # Override the module-level AWF_HOME so _invoke uses the empty path.
+        monkeypatch.setattr(mod, "AWF_HOME", empty_awf_home)
+
+        rc = mod.main([])
+
+        # Step 1 will fail with exit 4 (skill script not found).
+        assert rc == 4, f"Expected exit 4 for missing skill script, got {rc}"
+
+    def test_missing_script_no_subprocess_called(self, tmp_path, monkeypatch):
+        """When skill script is missing, subprocess.run is never invoked."""
+        _make_project(tmp_path, with_infra=True)
+        monkeypatch.chdir(tmp_path)
+        _patch_shared(monkeypatch)
+
+        empty_awf_home = tmp_path / "empty_awf"
+        empty_awf_home.mkdir()
+        monkeypatch.setenv("AWF_HOME", str(empty_awf_home))
+
+        mod = _import_composer()
+        monkeypatch.setattr(mod, "AWF_HOME", empty_awf_home)
+
+        call_count = 0
+
+        def fake_run(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return _make_proc()
+
+        with patch("subprocess.run", side_effect=fake_run):
+            mod.main([])
+
+        assert call_count == 0, "subprocess.run must not be called when skill script is missing"

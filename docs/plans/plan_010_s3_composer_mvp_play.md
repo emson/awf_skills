@@ -1,6 +1,6 @@
 # Plan 010 — S3 composer `awf-stage-mvp-play` (proof of architecture)
 
-**Status:** implemented
+**Status:** changes-requested
 **Phase:** B
 **Spec refs:** [`spec.md` § B5](../spec.md), [`decisions.md` D-001](../decisions.md#d-001--multi-stage-architecture-pattern), [D-003](../decisions.md#d-003--awf-schemas-projectjson-infrajson-sharedjson), [`08-logging.md`](../08-logging.md)
 **Owner (current):** Reviewer
@@ -14,6 +14,8 @@
 | 2026-06-01 | draft | Lead | Initial plan; proves Phase B architecture by chaining the ten S3 atomic skills into a first composer; encodes T1–T5 tensions from plan_008/009 lessons. |
 | 2026-06-01 | review-passed | Reviewer | Pass 1: all five tensions approved as recommended. One blocking prerequisite amendment (plan_009 `awf-kamal-setup` must emit `"gate":"dns_propagation"` in JSON on exit-3). Tier-3 happy-path confirmed as merge gate. No other blockers. |
 | 2026-06-01 | implemented | Dev | `skills/awf-stage-mvp-play/SKILL.md` + `scripts/stage_mvp_play.py` implemented. 24 new tests in `tests/skills/test_stage_mvp_play.py` — all passing. Full suite 265 green (241 baseline + 24 new). ruff clean. Tier-3 real-domain test is follow-up merge gate. |
+| 2026-06-01 | changes-requested | Reviewer | Code review Pass 1: 1 Blocker (DATABASE_URL plaintext in process.invoke log via dead safe_args), 2 Majors (re-run breaks at step 4 when neon_branch returns skip without connection_string; missing-script untested). Fix and re-submit. |
+| 2026-06-01 | fix-applied | Dev | B1 fixed: `_redact_cmd` helper strips `--value`/`--from-file` values; `log.process` now receives `redacted_cmd`; dead `safe_args` param removed; also fixed script path naming bug (`awf-` prefix was not stripped, causing incorrect path). M1 fixed: `_kamal_secrets_has_database_url` checks `.kamal/secrets` on re-run; step 4 auto-skips if key already present; `test_skip_actions_on_rerun` updated to use real skip payloads (no `connection_string`). M2 fixed: `_invoke` guards `skill_script.exists()` before subprocess; exits 4 with clear message. 4 new tests added (269 total, all green, ruff clean). |
 
 ## Goal
 
@@ -562,3 +564,77 @@ The reviewer has inspected `skills/awf-kamal-setup/scripts/kamal_setup.py`. The 
 
 **Tier-3 happy-path — merge gate or follow-up?**
 MERGE GATE. `spec.md § B5` and the build-order note at `spec.md` "PR 4" both state: "End-to-end test on a real test domain is the merge gate." The plan's implementation order item 6 ("Tier-3 manual happy-path — record in PR description; not a CI gate") is accurate about it not being a CI gate, but calling it "not a CI gate" should not be read as optional. The tier-3 run should be recorded in the PR description with a screenshot or log excerpt before the PR is marked ready-for-merge. Given that plan_010 is the architectural proof point for Phase B, skipping or deferring tier-3 is not acceptable. This is not a change to the plan's implementation order — it is a clarification that step 6 is blocking the PR merge even though it runs manually.
+
+---
+
+### Pass 1 (2026-06-01) — code review
+
+**Reviewer:** Sonnet 4.6
+**Verdict: changes-requested — 1 Blocker, 2 Majors. Not accepted until Blocker is resolved.**
+
+**Verified:** 265/265 tests green (`uv run --with pytest … pytest tests/ -v`). ruff clean (`uv run --with ruff ruff check` — All checks passed). Diff stat: 4 files changed, 2243 insertions — plan doc, SKILL.md, script, tests. No regressions in baseline.
+
+---
+
+#### Checklist pass
+
+- [x] `log.session(composer="awf-stage-mvp-play", target="mvp-play")` wraps the main orchestration body (lines 536, 529 for dry-run). Correct.
+- [x] Each atomic skill invoked via `_invoke()` as subprocess with `--json` appended unconditionally (line 122) and `cwd=str(ctx.root)` (line 131). Correct.
+- [x] On mid-run failure: `return final_exit` inside the `with log.session` block before `advance_anchor` is ever called. Anchor not advanced. Tests `test_step5_fails_exits_3` and `test_step3_fails_no_subprocess_after` verify this.
+- [x] DNS gate: `step_kamal_setup()` detects `exit_code == 3` and `payload.get("gate") == "dns_propagation"`, emits `log.gate(name="dns_propagation", ...)`, prints stderr instruction, returns `StepResult(exit_code=5)`. Caller in `main()` checks `r7.exit_code == 5` and exits without calling `log.error` a second time (clean gate path, lines 598–603). Correct.
+- [x] `awf-kamal-setup` (inspected on this branch) now emits structured JSON `{"action":"gate","gate":"dns_propagation","reason":...}` to stdout when `--json` is set and `KamalDnsTimeout` fires (lines 83–93 of `kamal_setup.py`). The plan's Pass 1 blocking prerequisite was already resolved in the implementation — the structured gate path is live and tested. No stderr-substring fallback is needed or present.
+- [x] Re-run / skip: `test_skip_actions_on_rerun` confirms all 8 steps are still invoked (conservative `needed()` per T1) and anchor advances. `action=skip` entries appear in JSON output steps list.
+- [x] `--dry-run`: `test_dry_run_no_subprocess` asserts `call_count == 0`. The dry-run path calls `print_dry_run_plan()` and returns 0 without entering the main orchestration block. `log.intent` and `log.note(action=dry-run)` emitted per step.
+- [x] Sessions are flat: no nested `log.session` anywhere. The dry-run path and the main path each open exactly one session and never recurse.
+- [x] Exit code table consistent: 0/1/2/3/4/5. `_map_child_exit` maps unexpected codes to 3 (line 467–468). Exit 5 is only emitted by the kamal_setup gate path and is never fed back into `_map_child_exit` (the gate path returns before that call).
+- [x] `test_integration_happy_path` uses real subprocesses with fake scripts on disk; `test_integration_nonzero_exit` covers the non-zero integration path.
+- [x] SKILL.md frontmatter: `name`, `description`, 8-step sequence, inputs table (`--dry-run`, `--play-hostname`, `--port`, `--node-version`, `--json`), exit-code table including code 5, prerequisites with `awf-doctor` reference. All present.
+
+---
+
+#### Blocker
+
+**B1 — DATABASE_URL leaks into `process.invoke` log event via `safe_args` dead code.**
+
+`_invoke()` accepts a `safe_args: dict | None = None` parameter and the call-site comment at line 236 states "safe_args must never include the secret value — only key + source". However, `safe_args` is never used inside `_invoke`. The full `cmd` list is built at line 122 as `["uv", "run", <script>] + args + ["--json"]` and this list — which for step 4 contains `["--value", "<postgres-connection-string>"]` — is passed verbatim to `log.process(cmd=cmd, …)` at line 137. `log.process` stores `"cmd": cmd` in the `process.invoke` JSONL event (confirmed in `lib/log.py` lines 716–717). The DATABASE_URL value therefore lands in the project event log in plaintext on every run.
+
+Fix: either (a) build a redacted `safe_cmd` list before calling `log.process` (replacing the `--value` argument with `<redacted>`), or (b) have `_invoke` accept a `log_cmd: list[str] | None` parameter that overrides the logged command. Option (a) is simpler — a 3-line helper that replaces the value after any `--value` flag with `<redacted>`, applied only when building the argument for `log.process`. The subprocess itself still receives the real `cmd`; only the log call gets the sanitised version.
+
+No test currently catches this because the test suite does not assert the content of `process.invoke` log events. A regression test asserting that no `process.invoke` event contains the literal connection string value should accompany the fix.
+
+---
+
+#### Majors
+
+**M1 — Step 4 fail-fast guard on empty `connection_string` is unreachable on re-run.**
+
+`step_app_secret_set(ctx, connection_string)` exits 4 if `connection_string` is falsy. The value is sourced at line 566 as `r3.payload.get("connection_string", "")`. On a re-run where step 3 returns `action="skip"`, the atomic skill (`awf-neon-branch`) emits only `{"action": "skip"}` — the `connection_string` field is not present in skip payloads (the branch already exists; there is nothing to return). So `connection_string` will be `""` on every re-run, and `step_app_secret_set` will exit 4 with "step 3 (awf-neon-branch) must provide it" even though the secret was already written successfully on the first run. This breaks the re-run / idempotency guarantee that is the core AC of the composer.
+
+Fix: the composer should also check `ctx.infra.neon.branch_connection_secret_ref` or a stored connection-string field in `infra.json` as a fallback source. Alternatively, `awf-neon-branch` should always emit `connection_string` in its JSON output (including on `action="skip"`) — but that requires a plan_009 amendment. The simpler fix at the composer layer is to also check `ctx.infra.neon` for an existing secret reference, and if `DATABASE_URL` is already present in `.kamal/secrets`, treat the step as skippable without re-reading the connection string. The exact approach is for the implementer to choose, but the current code path will break every re-run at step 4.
+
+Test coverage gap: `test_skip_actions_on_rerun` provides a `connection_string` in the step-3 skip response (`_build_happy_responses` is reused for skip responses in this test). This hides the bug — a realistic `action="skip"` payload from `awf-neon-branch` would not include `connection_string`. The test should be updated to use a step-3 skip payload without `connection_string` to exercise the actual re-run scenario.
+
+**M2 — `_invoke` skill-name-to-script-path mapping is fragile for multi-word skills.**
+
+Line 120: `skill_script = AWF_HOME / "skills" / skill / "scripts" / f"{skill.replace('-', '_')}.py"`. This mapping works for all eight current skills (e.g., `awf-shared-infra-get` → `awf_shared_infra_get.py`). However, `awf-cf-dns-record` would resolve to `awf_cf_dns_record.py`, which is correct, while a hypothetical future skill `awf-app-secret-set` resolves to `awf_app_secret_set.py` — which is also correct. The pattern is consistent with the rest of the codebase. Not a current defect. However: there is no existence check before building the command, so a typo in a skill name produces a `uv run <nonexistent-path>` invocation that exits non-zero with a confusing "file not found" stderr rather than a composer-level error. Suggest adding a `skill_script.exists()` check before invoking the subprocess and exiting 4 with a clear message if the script is missing. This is Minor for now, raised to Major because the integration test exercises this path with fake scripts that do exist — a missing-script scenario is untested.
+
+---
+
+#### Minors
+
+**m1 — Duplicate `log.note("starting step …")` and `_invoke`'s own `log.note(action=start)` per step.**
+Each step in `main()` emits `log.note("starting step shared_infra_get", …)` (line 537) and then `_invoke` emits a second `log.note(f"step={step_name} action=start …")` (line 124). Two near-identical events are written to the log for every step start. Harmless but noisy; consider removing the per-step `log.note` calls in `main()` and relying solely on `_invoke`'s own start note.
+
+**m2 — `root = anchor._path.parent.parent` accesses a private attribute.**
+Line 509 uses `anchor._path` (underscore prefix). If `ProjectAnchor` adds a public `root` property or renames `_path` in a future plan, this silently breaks. Suggest exposing a `anchor.project_root` property in `lib/state.py`, or using `anchor._path.parent` (the `.awf/` dir) and calling `.parent` once in the composer. Low risk today; noted for the next state-model refactor.
+
+**m3 — `_emit_output` always called inside `with log.session` on failure paths but the function itself has no session guard.**
+If `_emit_output` were ever called outside a session (e.g., in a future refactor that adds an early-exit before the `with` block), `log.note` calls inside it would emit orphan events. The current code is safe. Minor forward-looking concern only.
+
+---
+
+#### Status update
+
+Update the status log at the top of this file:
+
+| 2026-06-01 | changes-requested | Reviewer | Code review Pass 1: 1 Blocker (DATABASE_URL plaintext in process.invoke log), 2 Majors (re-run breaks at step 4 on skip; missing-script path untested). Not accepted. Fix and re-submit for Pass 2. |

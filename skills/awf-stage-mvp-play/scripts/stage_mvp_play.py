@@ -102,13 +102,32 @@ class StepResult:
     stderr: str
 
 
+def _redact_cmd(cmd: list[str]) -> list[str]:
+    """Return a copy of cmd with sensitive argument values replaced by <redacted>.
+
+    Currently redacts the value following --value and the path following
+    --from-file. Extend this list as new secret-bearing flags are added.
+    """
+    REDACT_NEXT = {"--value", "--from-file"}
+    result: list[str] = []
+    skip_next = False
+    for arg in cmd:
+        if skip_next:
+            result.append("<redacted>")
+            skip_next = False
+        else:
+            result.append(arg)
+            if arg in REDACT_NEXT:
+                skip_next = True
+    return result
+
+
 def _invoke(
     ctx: ComposerCtx,
     skill: str,
     args: list[str],
     *,
     step_name: str,
-    safe_args: dict[str, Any] | None = None,
 ) -> StepResult:
     """Invoke one atomic skill via subprocess and return a StepResult.
 
@@ -116,10 +135,20 @@ def _invoke(
     Sets cwd=ctx.root so the atomic skill's project locator finds the anchor.
 
     Emits log.note before and after the invocation.
+    Sensitive flag values (--value, --from-file) are redacted in log output.
     """
-    skill_script = AWF_HOME / "skills" / skill / "scripts" / f"{skill.replace('-', '_')}.py"
+    # Skill scripts strip the "awf-" prefix: awf-neon-branch → neon_branch.py
+    script_stem = skill.removeprefix("awf-").replace("-", "_")
+    skill_script = AWF_HOME / "skills" / skill / "scripts" / f"{script_stem}.py"
+
+    # Guard: fail fast with a clear error rather than an opaque uv failure.
+    if not skill_script.exists():
+        msg = f"skill script not found: {skill_script}"
+        log.error(msg=msg, hint=str(skill_script))
+        return StepResult(exit_code=4, payload={}, stderr=msg)
 
     cmd = ["uv", "run", str(skill_script)] + args + ["--json"]
+    redacted_cmd = _redact_cmd(cmd)
 
     log.note(f"step={step_name} action=start skill={skill}", by="awf-stage-mvp-play")
 
@@ -133,8 +162,8 @@ def _invoke(
     )
     duration_ms = int((time.monotonic() - t_start) * 1000)
 
-    # Log the subprocess invocation (non-secret args only).
-    log.process(cmd=cmd, exit_code=proc.returncode, duration_ms=duration_ms, cwd=str(ctx.root))
+    # Log the subprocess invocation using redacted cmd (secrets never in log).
+    log.process(cmd=redacted_cmd, exit_code=proc.returncode, duration_ms=duration_ms, cwd=str(ctx.root))
 
     # Try to parse JSON from stdout.
     payload: dict[str, Any] = {}
@@ -218,13 +247,36 @@ def step_neon_branch(ctx: ComposerCtx) -> StepResult:
 # ---------------------------------------------------------------------------
 
 
+def _kamal_secrets_has_database_url(root: Path) -> bool:
+    """Return True if .kamal/secrets already contains a DATABASE_URL= entry."""
+    secrets_path = root / ".kamal" / "secrets"
+    if not secrets_path.exists():
+        return False
+    try:
+        content = secrets_path.read_text(encoding="utf-8")
+        return any(line.startswith("DATABASE_URL=") for line in content.splitlines())
+    except OSError:
+        return False
+
+
 def step_app_secret_set(ctx: ComposerCtx, connection_string: str) -> StepResult:
     """Write DATABASE_URL into .kamal/secrets.
 
     The connection string is passed literally. It is never logged (per
     Decision §6 — only key name and source-step are safe to log).
+
+    Re-run idempotency: on a re-run, awf-neon-branch emits action=skip with no
+    connection_string. If .kamal/secrets already has DATABASE_URL= the secret
+    was written on a prior run; skip this step without error.
     """
     if not connection_string:
+        # Re-run path: check if the secret was already written by a previous run.
+        if _kamal_secrets_has_database_url(ctx.root):
+            log.note(
+                "step=secret_database_url action=skip reason=already_present",
+                by="awf-stage-mvp-play",
+            )
+            return StepResult(exit_code=0, payload={"action": "skip"}, stderr="")
         msg = (
             "awf-stage-mvp-play: no DATABASE_URL connection string available; "
             "step 3 (awf-neon-branch) must provide it"
@@ -234,13 +286,11 @@ def step_app_secret_set(ctx: ComposerCtx, connection_string: str) -> StepResult:
         return StepResult(exit_code=4, payload={}, stderr=msg)
 
     args = ["--key", "DATABASE_URL", "--value", connection_string]
-    # safe_args must never include the secret value — only key + source
     result = _invoke(
         ctx,
         "awf-app-secret-set",
         args,
         step_name="secret_database_url",
-        safe_args={"key": "DATABASE_URL", "source": "neon_branch"},
     )
     return result
 
