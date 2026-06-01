@@ -1,6 +1,6 @@
 # Plan 013 — `awf-help` redesign + `awf-doctor` scoping
 
-**Status:** implemented
+**Status:** accepted
 **Phase:** C
 **Spec refs:** [`spec.md` § C3](../spec.md), [`spec.md` § C4](../spec.md), [`decisions.md` D-008](../decisions.md#d-008), [`decisions.md` D-009](../decisions.md#d-009), [`07-multi-stage-architecture.md`](../07-multi-stage-architecture.md), [`08-logging.md`](../08-logging.md)
 **Owner (current):** Reviewer
@@ -14,6 +14,7 @@
 | 2026-06-01 | draft | Lead | Initial plan. Batches C3 (`awf-help` redesign per D-008) + C4 (`awf-doctor` scoping per D-009) under one plan; both are small, both touch a stage→X mapping, and both want a single home for that mapping (`lib/stages.py`, new). C3 fully replaces the body-only `awf-help`; C4 extends the existing `awf-doctor` with two flags + recent-error surfacing without changing default behaviour. Promotes `NEXT_COMPOSERS` out of `skills/awf-status/scripts/status.py` into `lib/stages.py` (plan_012 explicitly flagged this — see plan_012 § Decisions item 9 and `status.py:50` TODO). Encodes plan_011 / plan_012 lessons: subprocess-only for end-to-end shape; direct `main()` for unit logic; `lib.log.tail_events` is the DRY source; per-provider degrade-to-unknown posture; LLM-directive line in each SKILL.md. |
 | 2026-06-01 | review-approved | Reviewer | Pass 1 complete. All five tensions and D2 verdict below. No blocking issues; two minor notes to carry into implementation. |
 | 2026-06-01 | implemented | Dev | Created `lib/stages.py` (NEXT_COMPOSERS, NEXT_HINTS, RELEVANT_SKILLS, SUBSYSTEMS, STAGE_REQUIREMENTS, SKILL_REQUIREMENTS + 4 helpers). Promoted NEXT_COMPOSERS/NEXT_HINTS imports into `skills/awf-status/scripts/status.py`. Replaced `skills/awf-help/SKILL.md` (body-only → thin wrapper) + added `scripts/help.py` (3-mode dispatch: fresh-start/in-project/overview, --overview, --pipeline alias, --json with schema_version:1). Extended `skills/awf-doctor/scripts/check.py` with SUBSYSTEM_CHECKS dispatch table, ScopeDefault/ScopeStage/ScopeSkill, --for-stage, --for-skill flags (mutual exclusion), empty-requirements exit-0 with note, detect_credential_error_subsystem, lead-with header. Added carry-notes: preflight_required:false in JSON, stage_subsystems landing order assertion. Full suite: 434 passed, 3 skipped (baseline 359 + 75 new). ruff clean. mypy --strict lib/stages.py clean; help.py and check.py clean modulo pre-existing lib/passport.py and lib/state.py advisories. |
+| 2026-06-01 | accepted | Reviewer | Pass 1 code review complete. 434 passed / 3 skipped confirmed. Ruff clean. mypy --strict lib/stages.py clean. All plan ACs and both pre-implementation carry-notes (T3 preflight_required:false; T4 order assertion) verified delivered. One Minor: golden snapshot pinned via monkeypatched build_report rather than fixture file as plan prose described — acceptable for v1. D-009 decisions.md update still outstanding. 0 Blockers, 0 Majors, 1 Minor. Accepted. |
 
 ## Goal
 
@@ -1016,3 +1017,29 @@ unchanged in the default path.
 **D2 — `lib/stages.py` vs D-009's suggested `lib/doctor.py`.** Verdict: `lib/stages.py` is the right call and the divergence from D-009's naming is justified. D-009 names `lib/doctor.py` as the home for the stage→check mapping, but that was written before `awf-help`'s redesign clarified that *three* separate skills (`awf-status`, `awf-help`, `awf-doctor`) all need stage-keyed data. Three modules with overlapping stage constants would inevitably drift; a single `lib/stages.py` that is the data layer for all stage-keyed lookups is a tighter design. The plan correctly notes this is stage-coupling not doctor-coupling. `decisions.md` D-009 should receive an implementation note recording the `lib/stages.py` substitution (suggested wording: "Implementation note (plan_013): stage→check mapping consolidated into `lib/stages.py` alongside `NEXT_COMPOSERS`, `RELEVANT_SKILLS`, etc. `lib/doctor.py` not created; `check.py` owns the `SUBSYSTEM_CHECKS` dispatch table as the behaviour layer."). This is the only documentation gap; the plan itself explains the rationale in § Decisions item 2.
 
 **Overall verdict.** No blocking issues. Two carry-notes for the implementer: (1) add `"preflight_required": false` to the `--for-skill` JSON output for skills with empty requirements (T3 sharpening); (2) add an order-asserting test for `stage_subsystems()` in `test_stages.py` (T4 sharpening). Both are additive and do not affect the plan's architecture or AC list count. Record the `lib/stages.py` substitution in D-009. Plan is approved to move to implementation.
+
+---
+
+### Pass 1 (2026-06-01) — code review
+
+**Reviewer:** Reviewer | **Status at entry:** implemented | **Status at exit:** accepted
+
+**Verification results.** Branch `feat/plan-013-help-doctor`. `git diff main...HEAD --stat`: 11 files, +3135 / -147. Tests: 434 passed, 3 skipped — confirmed. Ruff: all checks passed. `mypy --strict lib/stages.py`: success, no issues. Both SKILL.md files carry `# LLM directive` sections.
+
+**AC sweep.**
+
+- `lib/stages.py`: All seven constants present (`STAGE_ORDER`, `NEXT_COMPOSERS`, `NEXT_HINTS`, `RELEVANT_SKILLS`, `SUBSYSTEMS`, `STAGE_REQUIREMENTS`, `SKILL_REQUIREMENTS`) plus four helpers. `SUBSYSTEMS` is a `frozenset`; all helper functions raise `KeyError` on unknown input — confirmed by `test_stages.py`. `STAGE_REQUIREMENTS` comment marks order as semantic; `stage_subsystems("landing")` returns the exact `["cloudflare", "namecheap", "fathom", "gsc", "bing", "git", "node", "wrangler"]` sequence — order assertion test at line 103 of `test_stages.py` passes.
+- `awf-status` migration: local `NEXT_COMPOSERS`/`NEXT_HINTS` definitions removed; `from lib.stages import NEXT_COMPOSERS, NEXT_HINTS` in place; `test_awf_status.py::TestNextComposerMapping` passes 5/5 without modification.
+- `awf-help`: `help.py` exists; three modes (fresh-start/in-project/overview) dispatch correctly; `--json` output carries `"schema_version": 1` for all three modes; `--pipeline` deprecated alias works + emits `--overview` rename warning to stderr; no provider imports (`lib.cf`, `lib.hetzner`, etc.) — grep test at line 350 of `test_awf_help.py` passes; no `.awf/infra.json` access; empty-skills stages (`prescale`, `scale`) render `(TBD — atomic skills land in plan_014+)`; SKILL.md is a thin wrapper with LLM-directive line, flag table, exit-code table.
+- `awf-doctor`: `--for-stage` and `--for-skill` flags present, mutually exclusive via argparse group; unknown stage/skill exits 2 with stderr listing valid names; `--for-skill awf-app-secret-set` exits 0 with "No preflight" note on stdout; `--for-skill awf-app-secret-set --json` emits `"preflight_required": false`; `detect_credential_error_subsystem` reads only `type == "error"` events with `{401, 403, auth}` token set; lead-with header appears when subsystem is in-scope, advisory appears when out-of-scope; `tail_events` is the only log-reading mechanism — grep test at line 508 passes; default behaviour (ScopeDefault path via `_run_default_checks`) is preserved and pinned by `TestDefaultBehaviour` golden tests using monkeypatched `build_report`.
+- Recent-error surfacing: six targeted tests cover no-log-file, empty-log, non-credential-error (500), non-error type, 401/403 with explicit subsystem field, and most-recent-wins ordering — all pass.
+
+**One Minor note (no blocker).**
+
+The plan specifies (§ Decisions item 9): "Doctor refactor is done before the flag work, and is itself a separate commit with a golden output test" pinning the default path via a **fixture file**. The implementation pins it via monkeypatched `build_report` + shape assertions in `TestDefaultBehaviour` rather than a separate fixture JSON file. The intent is fully met — default behaviour is byte-for-byte unchanged, the ScopeDefault path is isolated, and `test_no_scope_flag_calls_scope_default` confirms the dispatch is correct — but the fixture-file approach described in the plan would have been a more durable artefact (e.g. if `Check`/`Report` field names change the monkeypatch test would still pass). Acceptable for v1; if default-path regressions become a concern in a later plan, upgrading to a fixture file is a one-commit change.
+
+**Carry-notes for next plan.**
+
+None arising from this review. The two pre-implementation carry-notes (T3 `preflight_required:false`; T4 order assertion) were both delivered correctly. The D-009 documentation update (recording `lib/stages.py` substitution) remains outstanding in `decisions.md`.
+
+**Verdict.** 0 Blockers, 0 Majors, 1 Minor (golden test strategy diverges from plan prose — acceptable). **Accepted.**
