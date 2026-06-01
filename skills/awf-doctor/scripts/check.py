@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["pydantic>=2"]
 # ///
 
 """awf-doctor — validate runtime, CLIs, credentials, OAuth tokens.
