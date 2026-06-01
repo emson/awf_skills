@@ -804,6 +804,70 @@ class TestKamalSetup:
         monkeypatch.setattr(sys, "argv", ["kamal_setup", "--server-ip", "1.2.3.4"])
         assert main() == 3
 
+    def test_dns_timeout_json_gate_payload(self, tmp_path: Path, monkeypatch) -> None:
+        """KamalDnsTimeout + --json → stdout has gate.hit JSON shape, exits 3."""
+        from lib.kamal.errors import KamalDnsTimeout
+
+        _make_project(tmp_path)
+        _patch_env(monkeypatch, tmp_path, cwd=tmp_path)
+
+        failing_runner = FakeKamalRunner(
+            cwd=tmp_path,
+            setup_raises=KamalDnsTimeout(domain="example.com", expected_ip="1.2.3.4"),
+        )
+        monkeypatch.setattr("lib.kamal.runner.KamalRunner", lambda **kw: failing_runner)
+
+        main = self._main()
+        monkeypatch.setattr(
+            sys, "argv",
+            ["kamal_setup", "--server-ip", "1.2.3.4", "--json"],
+        )
+        rc, lines = _capture_stdout(main)
+
+        assert rc == 3
+        assert lines, "expected at least one stdout line"
+        data = json.loads(lines[0])
+        assert data["skill"] == "awf-kamal-setup"
+        assert data["action"] == "gate"
+        assert data["gate"] == "dns_propagation"
+        assert data["result"] == "fail"
+        assert data["domain"] == "example.com"
+        assert data["expected_ip"] == "1.2.3.4"
+        assert "reason" in data
+
+    def test_dns_timeout_human_stderr(self, tmp_path: Path, monkeypatch) -> None:
+        """KamalDnsTimeout without --json → human-readable message on stderr, exits 3."""
+        from lib.kamal.errors import KamalDnsTimeout
+
+        _make_project(tmp_path)
+        _patch_env(monkeypatch, tmp_path, cwd=tmp_path)
+
+        failing_runner = FakeKamalRunner(
+            cwd=tmp_path,
+            setup_raises=KamalDnsTimeout(domain="example.com", expected_ip="1.2.3.4"),
+        )
+        monkeypatch.setattr("lib.kamal.runner.KamalRunner", lambda **kw: failing_runner)
+
+        main = self._main()
+        monkeypatch.setattr(sys, "argv", ["kamal_setup", "--server-ip", "1.2.3.4"])
+
+        stderr_lines: list[str] = []
+        real_print = print
+
+        def capturing_print(*pargs, **pkwargs):
+            if pkwargs.get("file") is sys.stderr:
+                stderr_lines.append(" ".join(str(a) for a in pargs))
+            else:
+                real_print(*pargs, **pkwargs)
+
+        with patch("builtins.print", side_effect=capturing_print):
+            rc = main()
+
+        assert rc == 3
+        assert stderr_lines, "expected stderr output in human mode"
+        assert "awf-kamal-setup" in stderr_lines[0]
+        assert "example.com" in stderr_lines[0]
+
     def test_setup_failed_exits_3(self, tmp_path: Path, monkeypatch) -> None:
         """KamalSetupFailed raised by runner → exits 3."""
         from lib.kamal.errors import KamalSetupFailed

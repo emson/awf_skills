@@ -81,7 +81,18 @@ def main() -> int:
         print(f"awf-kamal-setup: {exc}", file=sys.stderr)
         return 2
     except KamalDnsTimeout as exc:
-        print(f"awf-kamal-setup: {exc}", file=sys.stderr)
+        if as_json:
+            print(jsonlib.dumps({
+                "skill": "awf-kamal-setup",
+                "action": "gate",
+                "gate": "dns_propagation",
+                "result": "fail",
+                "reason": str(exc),
+                "domain": exc.domain,
+                "expected_ip": exc.expected_ip,
+            }))
+        else:
+            print(f"awf-kamal-setup: {exc}", file=sys.stderr)
         return 3
     except KamalSetupFailed as exc:
         print(f"awf-kamal-setup: {exc}", file=sys.stderr)
