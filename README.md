@@ -4,13 +4,16 @@ A portable suite of Claude Code skills that scaffold, configure, deploy,
 and register a small Svelte website end-to-end — from a fresh domain
 through to Bing IndexNow — usable from any directory on disk.
 
-> **Status (Phase B PROOF complete).** S1 (landing page on Cloudflare
-> Pages) and S3 (MVP-play on shared Hetzner + Neon via Kamal) are both
-> implemented and pipeline-validated. 269 tests green. The full
-> promotion path from empty repo to live S3 site is one command:
-> `/awf-stage-mvp-play`. The remaining S4/S5 stages (prescale, scale)
-> reuse the same atomic-skill + composer model — implementation is
-> incremental per [`docs/spec.md`](docs/spec.md).
+> **Status (Phases A + B + C complete).** S1 (landing page on
+> Cloudflare Pages) and S3 (MVP-play on shared Hetzner + Neon via
+> Kamal) are pipeline-validated. The full promotion path from empty
+> repo to live S3 site is one command: `/awf-stage-mvp-play`. The
+> affordance layer — structured event log, "where am I" status,
+> context-aware help, and scoped doctor — is in place for both humans
+> and the LLM. **434 tests + 3 skipped (by design); all green.** The
+> remaining S4/S5 stages (prescale, scale) reuse the same atomic-skill
+> + composer model — implementation is incremental per
+> [`docs/spec.md`](docs/spec.md).
 
 ---
 
@@ -168,6 +171,16 @@ In recommended reading order:
 | `awf-kamal-setup` | First-time `kamal setup` (DNS-gated) | Emits structured `gate=dns_propagation` JSON on timeout |
 | `awf-kamal-deploy` | Rolling `kamal deploy` | Updates `Infra.kamal.last_deploy_image` |
 | `awf-stage-mvp-play` | **Composer** — promote project to `stage=mvp-play` | Subprocess-chains the 10 atomic skills; secret-redaction in logs; idempotent re-runs |
+
+### Affordances (Phase C complete)
+
+| Skill / Module | Purpose | Notes |
+|---|---|---|
+| `awf-log` | CLI surface for the event log | `tail`, `session`, `find`, `replay`, `note`, `sessions`, `diff` (stub) — JSONL + `--json` |
+| `awf-status` (rebuilt) | Canonical "where am I" | Fixed order: Project / Stage / Drift / Recent / Next; drift v1 (CF/Hetzner/Neon); `--json` schema-validated; idle detection |
+| `awf-help` (rebuilt) | Context-aware orientation | 3 modes: fresh-start / in-project / `--overview`; never mutates state |
+| `awf-doctor` (extended) | Scoped pre-flight | `--for-stage <name>` / `--for-skill <name>`; recent-error surfacing from log |
+| `lib/stages.py` | Single source of truth for stage→{composer, hint, relevant skills, subsystem requirements} | Consumed by `awf-status`, `awf-help`, `awf-doctor` |
 
 ### Multi-agent build workflow
 
