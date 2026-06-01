@@ -767,3 +767,161 @@ def set_dry_run(active: bool) -> None:
     """
     global _dry_run_active  # noqa: PLW0603 — intentional process-global flag
     _dry_run_active = active
+
+
+# ------------------------------------------------------------------------------ #
+# Read API
+# ------------------------------------------------------------------------------ #
+
+
+def read_events(path: Path) -> Iterator[dict[str, Any]]:
+    """Yield parsed events from a JSONL log file; skip malformed lines with stderr warning.
+
+    Never raises. If the file does not exist, yields nothing.
+    """
+    if not path.exists():
+        return
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for lineno, raw in enumerate(fh, 1):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    yield json.loads(raw)
+                except json.JSONDecodeError as e:
+                    print(
+                        f"warn: skipping malformed log line {lineno} in {path}: {e}",
+                        file=sys.stderr,
+                    )
+    except OSError as e:
+        print(f"warn: cannot read log file {path}: {e}", file=sys.stderr)
+
+
+def tail_events(path: Path, n: int) -> list[dict[str, Any]]:
+    """Return the last *n* events from *path*, oldest-of-tail first.
+
+    Uses an efficient read-from-end approach: reads the file in reverse
+    chunks to find line boundaries, avoiding loading the entire file.
+    Falls back to read_events on small files or when chunk reads fail.
+
+    Returns an empty list if the file does not exist.
+    """
+    if not path.exists():
+        return []
+    if n <= 0:
+        return []
+
+    # Efficient tail: collect up to n complete JSON lines from the end.
+    try:
+        size = path.stat().st_size
+        if size == 0:
+            return []
+
+        CHUNK = 8192
+        lines: list[str] = []
+        remaining = size
+        buf = b""
+
+        with open(path, "rb") as fh:
+            while remaining > 0 and len(lines) <= n:
+                read_size = min(CHUNK, remaining)
+                remaining -= read_size
+                fh.seek(remaining)
+                chunk = fh.read(read_size)
+                buf = chunk + buf
+                # Split on newlines; leftmost segment may be incomplete
+                parts = buf.split(b"\n")
+                # The first part may be a fragment (no leading newline guarantee)
+                # Keep it in buf for the next iteration
+                buf = parts[0]
+                # Remaining parts are complete lines (except possibly empty)
+                for part in reversed(parts[1:]):
+                    stripped = part.strip()
+                    if stripped:
+                        lines.append(stripped.decode("utf-8", errors="replace"))
+                    if len(lines) >= n:
+                        break
+                if len(lines) >= n:
+                    break
+
+            # Process any remaining buf content (first line of file or final fragment)
+            if remaining == 0 and buf.strip():
+                lines.append(buf.strip().decode("utf-8", errors="replace"))
+
+        # lines is in reverse order; take first n, then reverse to oldest-first
+        tail_lines = lines[:n]
+        tail_lines.reverse()
+
+        result: list[dict[str, Any]] = []
+        for raw in tail_lines:
+            try:
+                result.append(json.loads(raw))
+            except json.JSONDecodeError as e:
+                print(f"warn: skipping malformed tail line: {e}", file=sys.stderr)
+        return result
+
+    except OSError as e:
+        print(f"warn: tail_events read failed for {path}: {e}", file=sys.stderr)
+        return []
+
+
+def iter_sessions(path: Path) -> Iterator[dict[str, Any]]:
+    """Yield session summary objects from a sessions.jsonl index file.
+
+    Each line is expected to be a session summary dict written by
+    _append_session_index(). Skips malformed lines with stderr warning.
+    """
+    yield from read_events(path)
+
+
+def find_session_bounds(
+    events: list[dict[str, Any]], session_id: str
+) -> tuple[int, int] | None:
+    """Return (start_idx, end_idx) of *session_id* in the events list.
+
+    Searches for the ``session.start`` event with the matching session field,
+    then the paired ``session.end``. Returns None if the session is not found.
+    If no ``session.end`` is found (in-progress session), end_idx is the last
+    event index in the list.
+    """
+    start_idx: int | None = None
+    for i, ev in enumerate(events):
+        if ev.get("type") == "session.start" and ev.get("session") == session_id:
+            start_idx = i
+            break
+    if start_idx is None:
+        return None
+
+    end_idx = len(events) - 1  # default: no session.end found
+    for i in range(start_idx + 1, len(events)):
+        ev = events[i]
+        if ev.get("type") == "session.end" and ev.get("session") == session_id:
+            end_idx = i
+            break
+
+    return (start_idx, end_idx)
+
+
+def latest_session_id(path: Path) -> str | None:
+    """Return the most recent ``session.start`` session id from *path*.
+
+    Reads the file from the end for efficiency. Returns None if no
+    ``session.start`` event is found.
+    """
+    if not path.exists():
+        return None
+    # Read a reasonable tail to find the latest session.start
+    # Most sessions fit within 500 events; start with 200 from tail
+    for batch_n in (200, 1000, 5000):
+        events = tail_events(path, batch_n)
+        # Scan backwards for session.start
+        for ev in reversed(events):
+            if ev.get("type") == "session.start":
+                sid = ev.get("session")
+                if sid:
+                    return str(sid)
+        # If we read fewer events than requested, we've seen the whole file
+        if len(events) < batch_n:
+            break
+    return None
