@@ -25,7 +25,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr, ValidationError
 
@@ -581,3 +581,117 @@ class Shared(BaseModel):
             raise StateValidationError(
                 f"Shared invariant violations: {problems}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Status JSON schema (spec § C2 — awf-status --json output)
+# ---------------------------------------------------------------------------
+
+STATUS_JSON_SCHEMA: Final[str] = """
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "awf-status output",
+  "description": "Machine-readable output from awf-status --json.  Two shapes via oneOf: (1) project found (stage != none), (2) no project anchor found (stage == none).",
+  "oneOf": [
+    {
+      "title": "ProjectPresent",
+      "description": "Emitted when a .awf/project.json is found.",
+      "type": "object",
+      "required": ["schema_version", "project", "stage", "drift", "recent", "next_composer", "not_yet_checked", "verbose"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "description": "Schema version integer. Always 1 for this release.",
+          "type": "integer",
+          "const": 1
+        },
+        "project": {
+          "description": "Project identity snapshot.",
+          "type": "object",
+          "required": ["slug", "domain", "root"],
+          "additionalProperties": false,
+          "properties": {
+            "slug":   {"type": "string", "description": "Project slug (e.g. example-com)."},
+            "domain": {"type": "string", "description": "Project domain (e.g. example.com)."},
+            "root":   {"type": "string", "description": "Absolute path to the project root directory."}
+          }
+        },
+        "stage": {
+          "description": "Current pipeline stage from .awf/project.json.",
+          "type": "string",
+          "enum": ["landing", "demo", "mvp-play", "prescale", "scale"]
+        },
+        "drift": {
+          "description": "List of drift entries, one per divergence found. Empty array when no drift is detected.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["provider", "resource", "state_value", "world_value", "suggested_skill", "note"],
+            "additionalProperties": false,
+            "properties": {
+              "provider":        {"type": "string", "description": "Provider name: cloudflare | hetzner | neon."},
+              "resource":        {"type": "string", "description": "Resource identifier (e.g. zone, server:<id>, project, branch)."},
+              "state_value":     {"type": "string", "description": "Value recorded in the local state files."},
+              "world_value":     {"type": "string", "description": "Value observed from the provider API, or missing | unknown."},
+              "suggested_skill": {"type": "string", "description": "Atomic skill name that would re-converge this resource (empty string when unknown)."},
+              "note":            {"type": "string", "description": "One-line human explanation of the divergence."}
+            }
+          }
+        },
+        "recent": {
+          "description": "Last N log events (oldest-of-tail first). Raw event objects from lib.log.tail_events.",
+          "type": "array",
+          "items": {"type": "object"}
+        },
+        "next_composer": {
+          "description": "Name of the composer skill for stage+1, or null at terminal stage.",
+          "oneOf": [{"type": "string"}, {"type": "null"}]
+        },
+        "idle": {
+          "description": "Idle warning when most-recent session.end is >90 days ago. Null when no session.end exists yet.",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["days_since_last_session"],
+              "additionalProperties": false,
+              "properties": {
+                "days_since_last_session": {
+                  "type": "integer",
+                  "description": "Number of days since the most recent session.end event."
+                }
+              }
+            },
+            {"type": "null"}
+          ]
+        },
+        "not_yet_checked": {
+          "description": "Drift checks that are out of scope for this plan (v1). Always non-empty until a later plan removes names.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "verbose": {
+          "description": "True when --verbose was passed; affects event tail depth and details block.",
+          "type": "boolean"
+        },
+        "details": {
+          "description": "Per-provider state detail. Present only under --verbose.",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "title": "NoProject",
+      "description": "Emitted when no .awf/project.json is found in any ancestor directory.",
+      "type": "object",
+      "required": ["schema_version", "project", "stage", "hint"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "project":        {"type": "null"},
+        "stage":          {"type": "string", "const": "none"},
+        "hint":           {"type": "string", "description": "Human-readable guidance on next steps."}
+      }
+    }
+  ]
+}
+"""

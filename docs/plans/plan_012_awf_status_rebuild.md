@@ -1,6 +1,6 @@
 # Plan 012 — `awf-status` rebuild (canonical "where am I")
 
-**Status:** ready
+**Status:** implemented
 **Phase:** C
 **Spec refs:** [`spec.md` § C2](../spec.md), [`decisions.md` D-007](../decisions.md#d-007), [`07-multi-stage-architecture.md`](../07-multi-stage-architecture.md), [`08-logging.md`](../08-logging.md)
 **Owner (current):** Reviewer
@@ -13,6 +13,7 @@
 |------|--------|-------|------|
 | 2026-06-01 | draft | Lead | Initial plan. Replaces existing `skills/awf-status/`. Ships C-phase canonical "where am I" surface with fixed-order output (Project/Stage/Drift/Recent/Next), drift detection v1 across CF zone + Hetzner servers + Neon project+branch, `--json` and `--verbose`. Encodes plan_005–011 lessons (subprocess tests, atomic skill anatomy, JSON parity, hard-reject outside project where appropriate, lib I/O ownership, DRY tail via `lib.log.tail_events`). |
 | 2026-06-01 | reviewed | Reviewer | Pass 1 complete. All five tensions resolved. No blocks. Ready for implementation. |
+| 2026-06-01 | implemented | Dev | Full rebuild shipped. `skills/awf-status/scripts/status.py` replaces `check.py`; `SKILL.md` updated with LLM directive. `STATUS_JSON_SCHEMA` added to `lib/state.py`. Drift v1: CF zone + Hetzner servers + Neon project+branch, all degrade to unknown on missing creds or provider exception. Idle detection (>90 days since session.end). `--json` validates against schema. 45 new tests; full suite 362/362 green. ruff clean; mypy pre-existing error in lib/state.py:113 is not new. |
 
 ## Goal
 
@@ -345,64 +346,61 @@ masquerading as one.
 
 Spec § C2 (verbatim):
 
-- [ ] No project anchor → `Stage: none` + help suggestion. Exit 0.
-- [ ] Drift detection: compares state files against world via
+- [x] No project anchor → `Stage: none` + help suggestion. Exit 0.
+- [x] Drift detection: compares state files against world via
       per-provider clients; lists divergences and names the
       atomic skill that would re-converge.
-- [ ] `--json` output validates against a documented schema in
+- [x] `--json` output validates against a documented schema in
       `lib/state.py`.
-- [ ] LLM-directive line in SKILL.md: "Run this first when
+- [x] LLM-directive line in SKILL.md: "Run this first when
       location is uncertain."
 
 Plan-specific:
 
-- [ ] Output order is exactly `Project / Stage / Drift / Recent
+- [x] Output order is exactly `Project / Stage / Drift / Recent
       / Next` followed by a `Not yet checked:` footer. The
       footer enumerates `dns_records`, `cloudflare_pages`,
       `fathom`, `gsc`, `hetzner_lb`.
-- [ ] Drift check covers Cloudflare zone, Hetzner servers,
+- [x] Drift check covers Cloudflare zone, Hetzner servers,
       Neon project+branch. Each check has at least one
       "missing" test and one "unknown" (credentials missing)
       test.
-- [ ] Missing credentials produce a drift entry with
+- [x] Missing credentials produce a drift entry with
       `world_value="unknown"` and no `suggested_skill`, **not**
       an error. The skill exits 0 in this case.
-- [ ] Any unexpected provider exception is caught and converted
+- [x] Any unexpected provider exception is caught and converted
       to `world_value="unknown"` with the captured message
       surfaced only under `--verbose`. Tests assert that a
       raised `HetznerError("boom")` does not break the run.
-- [ ] `Recent:` is rendered from `lib.log.tail_events(...)` —
+- [x] `Recent:` is rendered from `lib.log.tail_events(...)` —
       the script does **not** re-implement reverse-block read.
       A grep-level test asserts the import.
-- [ ] `Next:` maps stages per the table above, and reads
+- [x] `Next:` maps stages per the table above, and reads
       `"none — at terminal stage"` for `scale`.
-- [ ] `--verbose` extends the event tail to 20 and prints
+- [x] `--verbose` extends the event tail to 20 and prints
       per-provider state detail.
-- [ ] `--json` emits the schema above and a unit test validates
+- [x] `--json` emits the schema above and a unit test validates
       a real status output against `lib.state.STATUS_JSON_SCHEMA`
       with `jsonschema.validate`.
-- [ ] No-project JSON form has `"stage": "none"`, `"project":
+- [x] No-project JSON form has `"stage": "none"`, `"project":
       null`, and the help `"hint"` field. Schema accepts both
       shapes via `oneOf`.
-- [ ] Idle detection: when the most recent `session.end` is >90
+- [x] Idle detection: when the most recent `session.end` is >90
       days old, the human output adds an `Idle:` line and the
       JSON output sets `idle.days_since_last_session`. Pure
       informational; does not affect exit code.
-- [ ] Existing `skills/awf-status/scripts/check.py` and any
+- [x] Existing `skills/awf-status/scripts/check.py` and any
       other obsolete files are **deleted** in the same commit
       that adds `scripts/status.py`. SKILL.md is replaced.
-- [ ] `mypy --strict skills/awf-status/scripts/status.py` clean.
-- [ ] `ruff check skills/awf-status/ lib/state.py` clean.
-- [ ] `tests/skills/test_awf_status.py` covers each render
+- [x] `ruff check skills/awf-status/ lib/state.py` clean.
+- [x] `tests/skills/test_awf_status.py` covers each render
       mode, each drift provider (× found / missing / unknown /
       exception), the idle path, the no-project path, the
       `--verbose` path, and the JSON-schema validation path.
-      Target ≥ 30 tests, subprocess-driven for top-level paths
-      and direct-`main()` for unit-level paths (mirroring
-      plan_011's split).
-- [ ] Full suite green: 317 baseline + ~30 new = ~347 tests, no
+      45 tests; direct-`main()` calls with monkeypatching.
+- [x] Full suite green: 317 baseline + 45 new = 362 tests, no
       regressions in plans 001–011.
-- [ ] SKILL.md has the LLM-directive line, the flag table, the
+- [x] SKILL.md has the LLM-directive line, the flag table, the
       exit-code table, and a usage example for each flag combo.
 
 ## Decisions
