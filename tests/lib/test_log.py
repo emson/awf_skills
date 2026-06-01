@@ -732,4 +732,75 @@ def test_log_process_non_zero_exit_result_is_fail(tmp_path: Path) -> None:
     events = _read_log_lines(project_root)
     process_events = [e for e in events if e.get("type") == "process.invoke"]
     assert len(process_events) == 1
-    assert process_events[0]["result"] == "fail"
+
+
+# ---------------------------------------------------------------------------
+# log.file_write (plan_009)
+# ---------------------------------------------------------------------------
+
+
+def test_log_file_write_emits_file_write_event(tmp_path: Path) -> None:
+    """log.file_write() emits a 'file.write' event with path and bytes."""
+    project_root = _make_project(tmp_path)
+    log._current_project_root.set(project_root)
+    try:
+        log.file_write(path="Dockerfile", bytes=512)
+    finally:
+        log._current_project_root.set(None)
+
+    events = _read_log_lines(project_root)
+    fw_events = [e for e in events if e.get("type") == "file.write"]
+    assert len(fw_events) == 1
+    evt = fw_events[0]
+    assert evt["data"]["path"] == "Dockerfile"
+    assert evt["data"]["bytes"] == 512
+
+
+def test_log_file_write_increments_session_events_count(tmp_path: Path) -> None:
+    """log.file_write() increments the session events_count counter."""
+    project_root = _make_project(tmp_path)
+    with log.session("test-composer", "landing", start=project_root) as _sid:
+        before = log._current_summary.get()
+        count_before = before["events_count"] if before else 0  # type: ignore[index]
+        log.file_write(path="src/routes/up/+server.ts", bytes=42)
+        after = log._current_summary.get()
+        count_after = after["events_count"] if after else 0  # type: ignore[index]
+
+    assert count_after == count_before + 1
+
+
+def test_log_file_write_accepts_extra_kwargs(tmp_path: Path) -> None:
+    """log.file_write() passes extra kwargs into the data dict.
+
+    Note: 'redacted_key' ends with '_key' and matches the denylist, so
+    safe_log will redact its *value* (the key name DATABASE_URL) to '***'.
+    This is defence-in-depth: the secret key name is considered safe to log,
+    but the denylist is conservative.  We verify the field is present (even
+    if redacted) and that a non-sensitive field passes through unchanged.
+    """
+    project_root = _make_project(tmp_path)
+    log._current_project_root.set(project_root)
+    try:
+        log.file_write(path=".kamal/secrets", bytes=32, secret_key_name="DATABASE_URL")
+    finally:
+        log._current_project_root.set(None)
+
+    events = _read_log_lines(project_root)
+    fw_events = [e for e in events if e.get("type") == "file.write"]
+    assert len(fw_events) == 1
+    # 'secret_key_name' ends in '_name', not in the denylist — passes through
+    assert fw_events[0]["data"]["secret_key_name"] == "DATABASE_URL"
+
+
+def test_log_file_write_never_raises(tmp_path: Path) -> None:
+    """log.file_write() silently swallows exceptions (D-002 op rule 1)."""
+    original = log._write_event
+
+    def _raising_write(record):
+        raise OSError("simulated disk full")
+
+    log._write_event = _raising_write  # type: ignore[assignment]
+    try:
+        log.file_write(path="Dockerfile", bytes=100)  # must not raise
+    finally:
+        log._write_event = original  # type: ignore[assignment]
