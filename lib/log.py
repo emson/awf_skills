@@ -17,6 +17,7 @@ Public API (module-as-namespace; import as ``from lib import log``):
   log.note(text, by)
   log.safe_log(value)                     public redaction helper
   log.set_dry_run(active)                 toggle intent-event gating
+  log.file_write(path, bytes)             for filesystem mutations (no state.change emitted)
 
 Design decisions implemented here (locked in plan_003):
   1. ContextVar threading: session_id, skill, etc. thread automatically.
@@ -727,6 +728,34 @@ def process(
 # ---------------------------------------------------------------------------
 # Dry-run toggle
 # ---------------------------------------------------------------------------
+
+
+def file_write(
+    path: str,
+    bytes: int,
+    **kwargs: Any,
+) -> None:
+    """Emit a file.write event for a local filesystem mutation.
+
+    Used by skills that mutate project files (not state files) and
+    therefore have no ``state.change`` event to emit. One event per
+    touched path; byte count is the file size written.
+
+    This function never raises (D-002 op rule 1).
+
+    Args:
+        path:   Relative path of the file written (never absolute to avoid
+                leaking home-dir paths into the log).
+        bytes:  Byte count of the content written.
+        **kwargs: Optional extra fields (e.g. ``redacted_key`` for secrets).
+    """
+    try:
+        data: dict[str, Any] = {"path": path, "bytes": bytes, **kwargs}
+        _write_event(_build_record("file.write", data=data))
+        if (s := _current_summary.get()) is not None:
+            s["events_count"] += 1
+    except Exception as e:  # noqa: BLE001
+        print(f"warn: log.file_write failed: {e}", file=sys.stderr)
 
 
 def set_dry_run(active: bool) -> None:
