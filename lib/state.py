@@ -486,6 +486,7 @@ class PlayServer(BaseModel):
     hostname: str = ""
     registry: str = ""
     created: str = ""
+    kamal_setup_done_for_server_id: str = ""
 
 
 class DefaultRegistry(BaseModel):

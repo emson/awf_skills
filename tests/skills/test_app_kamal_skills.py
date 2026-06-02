@@ -72,6 +72,19 @@ _MINIMAL_INFRA: dict[str, Any] = {
     "kamal": {"config_path": "config/deploy.yml", "last_deploy_image": None},
 }
 
+_MINIMAL_SHARED: dict[str, Any] = {
+    "play_server": {
+        "hetzner_id": "srv-111",
+        "ip": "1.2.3.4",
+        "hostname": "play-server",
+        "registry": "ghcr.io",
+        "created": "2026-06-01T00:00:00Z",
+        "kamal_setup_done_for_server_id": "",
+    },
+    "play_neon_project_id": "neon-proj-111",
+    "default_registry": {"host": "ghcr.io", "user": "testuser"},
+}
+
 
 def _make_project(root: Path, *, domain: str = "example.com", with_infra: bool = False) -> None:
     """Write .awf/project.json (and optionally .awf/infra.json) into root."""
@@ -92,6 +105,18 @@ def _read_infra(root: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _make_shared(tmp_path: Path, monkeypatch, *, done_for_id: str = "") -> Path:
+    """Write a shared.json to tmp_path/config/awf/ and patch user_config_dir."""
+    config_dir = tmp_path / "config" / "awf"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    shared = dict(_MINIMAL_SHARED)
+    shared["play_server"] = dict(shared["play_server"])
+    shared["play_server"]["kamal_setup_done_for_server_id"] = done_for_id
+    (config_dir / "shared.json").write_text(json.dumps(shared, indent=2), encoding="utf-8")
+    monkeypatch.setattr("lib.awf_home.user_config_dir", lambda: config_dir)
+    return config_dir
 
 
 def _read_log_events(root: Path) -> list[dict[str, Any]]:
@@ -719,9 +744,10 @@ class TestKamalSetup:
         assert "awf-kamal-setup" in result.stdout
 
     def test_happy_path_create(self, tmp_path: Path, monkeypatch) -> None:
-        """Success path: fake runner called with correct domain/ip, exits 0."""
+        """Success path: fake runner called with correct domain/ip, exits 0; shared.json updated."""
         _make_project(tmp_path)
         _patch_env(monkeypatch, tmp_path, cwd=tmp_path)
+        config_dir = _make_shared(tmp_path, monkeypatch, done_for_id="")
 
         runner_instance = FakeKamalRunner(cwd=tmp_path)
 
@@ -744,10 +770,15 @@ class TestKamalSetup:
         assert runner_instance.setup_calls[0]["server_ip"] == "1.2.3.4"
         assert runner_instance.setup_calls[0]["domain"] == "example.com"
 
+        # Verify shared.json was updated with the server ID.
+        shared_data = json.loads((config_dir / "shared.json").read_text(encoding="utf-8"))
+        assert shared_data["play_server"]["kamal_setup_done_for_server_id"] == "srv-111"
+
     def test_happy_path_create_json(self, tmp_path: Path, monkeypatch) -> None:
         """--json output has correct shape."""
         _make_project(tmp_path)
         _patch_env(monkeypatch, tmp_path, cwd=tmp_path)
+        config_dir = _make_shared(tmp_path, monkeypatch, done_for_id="")
 
         runner_instance = FakeKamalRunner(cwd=tmp_path)
         monkeypatch.setattr("lib.kamal.runner.KamalRunner", lambda **kw: runner_instance)
@@ -764,6 +795,56 @@ class TestKamalSetup:
         assert set(data.keys()) >= {"action", "domain", "server_ip"}
         assert data["action"] == "created"
 
+        # Verify shared.json was updated.
+        shared_data = json.loads((config_dir / "shared.json").read_text(encoding="utf-8"))
+        assert shared_data["play_server"]["kamal_setup_done_for_server_id"] == "srv-111"
+
+    def test_happy_path_skip(self, tmp_path: Path, monkeypatch) -> None:
+        """When kamal_setup_done_for_server_id == hetzner_id, runner.setup is NOT called and action=='skip'."""
+        _make_project(tmp_path)
+        _patch_env(monkeypatch, tmp_path, cwd=tmp_path)
+        # done_for_id matches hetzner_id → should skip
+        _make_shared(tmp_path, monkeypatch, done_for_id="srv-111")
+
+        runner_instance = FakeKamalRunner(cwd=tmp_path)
+        monkeypatch.setattr("lib.kamal.runner.KamalRunner", lambda **kw: runner_instance)
+
+        main = self._main()
+        monkeypatch.setattr(
+            sys, "argv",
+            ["kamal_setup", "--server-ip", "1.2.3.4", "--json"],
+        )
+        rc, lines = _capture_stdout(main)
+
+        assert rc == 0
+        assert runner_instance.setup_calls == [], "runner.setup must NOT be called on skip"
+        data = json.loads(lines[0])
+        assert data["action"] == "skip"
+
+    def test_different_server_id_runs_setup(self, tmp_path: Path, monkeypatch) -> None:
+        """When kamal_setup_done_for_server_id != hetzner_id (server reprovisioned), runs setup and updates field."""
+        _make_project(tmp_path)
+        _patch_env(monkeypatch, tmp_path, cwd=tmp_path)
+        # done_for_id is a stale old server ID — different from hetzner_id "srv-111"
+        config_dir = _make_shared(tmp_path, monkeypatch, done_for_id="old-server-999")
+
+        runner_instance = FakeKamalRunner(cwd=tmp_path)
+        monkeypatch.setattr("lib.kamal.runner.KamalRunner", lambda **kw: runner_instance)
+
+        main = self._main()
+        monkeypatch.setattr(
+            sys, "argv",
+            ["kamal_setup", "--server-ip", "1.2.3.4"],
+        )
+        rc = main()
+
+        assert rc == 0
+        assert len(runner_instance.setup_calls) == 1, "setup must run when server ID changed"
+
+        # shared.json must be updated to the current hetzner_id.
+        shared_data = json.loads((config_dir / "shared.json").read_text(encoding="utf-8"))
+        assert shared_data["play_server"]["kamal_setup_done_for_server_id"] == "srv-111"
+
     def test_no_project_exits_1(self, tmp_path: Path, monkeypatch) -> None:
         """No .awf/project.json → exits 1."""
         _patch_env(monkeypatch, tmp_path, cwd=tmp_path)
@@ -777,6 +858,7 @@ class TestKamalSetup:
 
         _make_project(tmp_path)
         _patch_env(monkeypatch, tmp_path, cwd=tmp_path)
+        _make_shared(tmp_path, monkeypatch, done_for_id="")
 
         failing_runner = FakeKamalRunner(
             cwd=tmp_path, setup_raises=KamalNotInstalled()
@@ -793,6 +875,7 @@ class TestKamalSetup:
 
         _make_project(tmp_path)
         _patch_env(monkeypatch, tmp_path, cwd=tmp_path)
+        _make_shared(tmp_path, monkeypatch, done_for_id="")
 
         failing_runner = FakeKamalRunner(
             cwd=tmp_path,
@@ -810,6 +893,7 @@ class TestKamalSetup:
 
         _make_project(tmp_path)
         _patch_env(monkeypatch, tmp_path, cwd=tmp_path)
+        _make_shared(tmp_path, monkeypatch, done_for_id="")
 
         failing_runner = FakeKamalRunner(
             cwd=tmp_path,
@@ -841,6 +925,7 @@ class TestKamalSetup:
 
         _make_project(tmp_path)
         _patch_env(monkeypatch, tmp_path, cwd=tmp_path)
+        _make_shared(tmp_path, monkeypatch, done_for_id="")
 
         failing_runner = FakeKamalRunner(
             cwd=tmp_path,
@@ -874,6 +959,7 @@ class TestKamalSetup:
 
         _make_project(tmp_path)
         _patch_env(monkeypatch, tmp_path, cwd=tmp_path)
+        _make_shared(tmp_path, monkeypatch, done_for_id="")
 
         failing_runner = FakeKamalRunner(
             cwd=tmp_path, setup_raises=KamalSetupFailed("kamal setup failed")

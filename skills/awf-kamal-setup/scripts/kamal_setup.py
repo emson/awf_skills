@@ -7,10 +7,12 @@
 """awf-kamal-setup — run `kamal setup` after DNS propagation poll.
 
 Wraps KamalRunner.setup(). The lib polls DNS before shelling out to kamal.
-Always invokes kamal (no skip path — see plan_009 Decision §3).
+Skips if Shared.play_server.kamal_setup_done_for_server_id == Shared.play_server.hetzner_id
+(proxy already installed on this server). Re-runs automatically if the server
+is reprovisioned and gets a new hetzner_id.
 
 Exit codes:
-    0  — success
+    0  — success (action may be "skip" or "created")
     1  — project not found (no .awf/project.json walking up)
     2  — kamal CLI not on PATH (KamalNotInstalled)
     3  — remote error (KamalDnsTimeout or KamalSetupFailed)
@@ -35,7 +37,7 @@ from lib import log  # noqa: E402
 from lib.kamal.errors import KamalDnsTimeout, KamalNotInstalled, KamalSetupFailed  # noqa: E402
 from lib.kamal.runner import KamalRunner  # noqa: E402
 from lib.project import ProjectNotFound  # noqa: E402
-from lib.state import ProjectAnchor  # noqa: E402
+from lib.state import ProjectAnchor, Shared  # noqa: E402
 
 
 def main() -> int:
@@ -70,12 +72,31 @@ def main() -> int:
         "dns_timeout": args.dns_timeout,
     }
 
+    # Load shared state to check skip condition.
+    shared = Shared.load_or_create()
+
+    # Determine whether to skip based on server-ID tracking.
+    skip = (
+        shared.play_server is not None
+        and shared.play_server.hetzner_id != ""
+        and shared.play_server.kamal_setup_done_for_server_id == shared.play_server.hetzner_id
+    )
+
     try:
         with log.session(composer="awf-kamal-setup", target="kamal-setup"):
             with log.invoke(skill="awf-kamal-setup", args=safe_args):
-                runner = KamalRunner(cwd=root, dns_timeout_s=args.dns_timeout)
-                runner.setup(domain=domain, server_ip=args.server_ip)
-                action = "created"  # always — see plan_009 Decision §3
+                if skip:
+                    action = "skip"
+                else:
+                    runner = KamalRunner(cwd=root, dns_timeout_s=args.dns_timeout)
+                    runner.setup(domain=domain, server_ip=args.server_ip)
+                    action = "created"
+                    # Update tracking field if we have a shared play_server record.
+                    if shared.play_server is not None:
+                        shared.play_server.kamal_setup_done_for_server_id = (
+                            shared.play_server.hetzner_id
+                        )
+                        shared.save()
 
     except KamalNotInstalled as exc:
         print(f"awf-kamal-setup: {exc}", file=sys.stderr)

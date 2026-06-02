@@ -1,6 +1,6 @@
 ---
 name: awf-kamal-setup
-description: Run `kamal setup` after polling DNS propagation. Always invokes kamal (no setup_done gate). May take minutes on first run while waiting for DNS propagation.
+description: Run `kamal setup` on first use of a server; skip if already done for this server ID.
 ---
 
 # Purpose
@@ -9,16 +9,17 @@ Wraps `KamalRunner(cwd=anchor.path).setup(domain=..., server_ip=...)`.
 The lib polls the A-record for `domain` before shelling out to `kamal setup`
 (D-001 op rule #1: DNS-before-TLS). This cannot be bypassed by callers.
 
-**Important:** This skill always invokes `kamal setup` — there is no skip
-path. `action` is always `"created"` on success regardless of whether kamal
-actually performed work. This is intentional: kamal setup is idempotent
-(re-running on a configured server is a no-op for kamal), and we do not
-maintain a `setup_done` gate because that gate could drift from reality if
-the server is reprovisioned.
+**Important:** This skill skips `kamal setup` if
+`Shared.play_server.kamal_setup_done_for_server_id == Shared.play_server.hetzner_id`.
+This prevents kamal-proxy from being restarted on a shared server when a new
+app is deployed alongside existing ones. If the server is reprovisioned and
+gets a new `hetzner_id`, `awf-shared-infra-get` updates `PlayServer.hetzner_id`
+accordingly; the mismatch triggers setup automatically — no manual flag reset
+required. If no `play_server` record exists in `Shared`, setup always runs.
 
 On a *first* run this skill may take several minutes waiting for DNS to
-propagate. On subsequent runs, DNS is already resolved and the skill
-completes in seconds.
+propagate. On subsequent runs with the same server ID, the skill skips
+immediately.
 
 # Prerequisites
 
@@ -49,16 +50,18 @@ completes in seconds.
 
 | Code | Meaning |
 |------|---------|
-| `0`  | Success — kamal setup completed |
+| `0`  | Success — action is `"skip"` (already set up) or `"created"` (newly set up) |
 | `1`  | Project not found — no `.awf/project.json` walking up |
 | `2`  | Missing CLI — `kamal` binary not on PATH |
 | `3`  | Remote / subprocess error — `KamalDnsTimeout` or `KamalSetupFailed` |
 
 # Idempotency
 
-`kamal setup` is itself idempotent. The skill always invokes it. `action` is
-always `"created"` on success. No `state.change` event is emitted because
-this skill has no Infra state footprint.
+Skips if `Shared.play_server.kamal_setup_done_for_server_id == Shared.play_server.hetzner_id`.
+Automatically re-runs if the server is reprovisioned (new `hetzner_id`).
+When setup runs, `kamal_setup_done_for_server_id` is updated to the current
+`hetzner_id` in `~/.config/awf/shared.json`. Exit code 0 with `action="skip"`
+means setup was already done for this server; no kamal-proxy restart occurred.
 
 # Manual gates
 

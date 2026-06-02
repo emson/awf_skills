@@ -451,3 +451,27 @@ concrete need.
   [`notes/concepts-and-priorities.md`](notes/concepts-and-priorities.md#definitive-cheap-what-else-is-missing).
   Each tier-1 item (`awf-cost`, `awf-teardown` + idle detection,
   multi-env via Neon branches) will earn its own D-NNN when built.
+
+---
+
+## D-010 — kamal-proxy setup idempotency via server-ID tracking
+
+**Date:** 2026-06-02
+**Status:** Accepted
+
+**Context.** `awf-kamal-setup` previously always ran `kamal setup` unconditionally (plan_009 Decision §3). The rationale was that `kamal setup` is itself idempotent. This is true in isolation but incorrect for the shared play-server pattern: each new app deployment would trigger `kamal setup` on the shared server, which restarts kamal-proxy and causes a brief traffic interruption for all other apps already running on that server.
+
+**Decision.** Track `kamal_setup_done_for_server_id: str` on `PlayServer` in `~/.config/awf/shared.json`. `awf-kamal-setup` compares this field against `PlayServer.hetzner_id` before invoking kamal:
+
+- If they match → skip (proxy already installed and running on this server).
+- If they differ → run setup, then update the field to the current `hetzner_id`.
+- If `play_server` is absent → always run setup (non-shared server path; no tracking available).
+
+**Why server ID, not a boolean.** A bare `setup_done: bool` would drift if the Hetzner server is deleted and recreated. The new server gets a new `hetzner_id`; `awf-shared-infra-get` updates `PlayServer.hetzner_id` accordingly. The mismatch with the stale `kamal_setup_done_for_server_id` then triggers setup automatically — no manual flag reset required.
+
+**Alternatives rejected.**
+- *Always run setup:* Causes kamal-proxy restart disruption for every new app on the shared server. Rejected.
+- *`--force` flag to bypass skip:* Unnecessary once the server-ID approach handles reprovisioning. Rejected for now (can add if needed).
+- *Track in `Infra` per-project:* Correct for S4 project-specific servers, but the shared server state belongs in `Shared`, not per-project `Infra`. Deferred to S4.
+
+**Revisit if.** S4 introduces project-specific Hetzner servers; those need similar tracking in `Infra.kamal` rather than `Shared`. At that point, extend `Infra.kamal` with `setup_done_for_server_id` and update `awf-kamal-setup` to check both locations.
