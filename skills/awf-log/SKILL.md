@@ -157,6 +157,24 @@ with its provenance. Answers "where does `srv_123` live, and who applied it?"
 uv run "$AWF_HOME/skills/awf-log/scripts/log.py" where <resource_id> [--json]
 ```
 
+## `history [<project>] [--revision N]`
+
+A project's applied-state revisions, the way `helm history` lists a release's
+revisions (`lib/revisions.py`, D-012). Each `state.change` (every passport /
+infra save) is one numbered revision, with the skill, session, time, and which
+top-level keys it added / removed / changed. `--revision N` shows one revision's
+detail. This is history/groundwork for rollback — it does not perform rollback.
+
+```
+uv run "$AWF_HOME/skills/awf-log/scripts/log.py" history [my-site] [--revision 3] [--json]
+```
+
+| Arg / Flag | Default | Description |
+|------------|---------|-------------|
+| `project` | current project | Project slug or path |
+| `--revision N` | (list all) | Show the detail of revision N |
+| `--json` | `false` | Emit raw JSONL |
+
 ---
 
 # Inputs / invocation

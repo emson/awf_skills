@@ -7,7 +7,7 @@
 """awf-log — CLI window onto the awf event log.
 
 Sub-commands: tail, session, find, diff, note, replay, sessions,
-rebuild-index, inventory, where.
+rebuild-index, inventory, where, history.
 
 Exit codes:
     0  — success (including empty results)
@@ -49,6 +49,7 @@ from lib.log import (  # noqa: E402
 from lib.project import ProjectNotFound, find_project_root  # noqa: E402
 from lib.state import ProjectAnchor  # noqa: E402
 from lib import inventory as inventory_lib  # noqa: E402
+from lib import revisions as revisions_lib  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -645,6 +646,60 @@ def cmd_where(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Sub-command: history (applied-revisions for a project)
+# ---------------------------------------------------------------------------
+
+
+def cmd_history(args: argparse.Namespace) -> int:
+    """Show a project's applied-state revisions (D-012; `helm history` model)."""
+    root = revisions_lib.resolve_project_root(user_config_dir(), args.project)
+    if root is None:
+        target = args.project or "the current directory"
+        print(f"error: could not resolve a project for {target!r}", file=sys.stderr)
+        return 1
+
+    revisions = revisions_lib.project_revisions(root)
+
+    if args.revision is not None:
+        rev = next((r for r in revisions if r.n == args.revision), None)
+        if rev is None:
+            print(f"error: project has no revision {args.revision}", file=sys.stderr)
+            return 4
+        if args.json:
+            print(jsonlib.dumps(revisions_lib.as_dict(rev), separators=(",", ":"), ensure_ascii=False))
+            return 0
+        print(f"# revision {rev.n} — {root.name}")
+        print(f"  when:    {rev.ts}")
+        print(f"  by:      {rev.skill or '-'}  (session {rev.session or '-'})")
+        print(f"  file:    {rev.file}")
+        for label, keys in (("added", rev.added), ("removed", rev.removed), ("changed", rev.changed)):
+            for k in keys:
+                print(f"  {label:<8} {k}")
+        return 0
+
+    if args.json:
+        for rev in revisions:
+            print(jsonlib.dumps(revisions_lib.as_dict(rev), separators=(",", ":"), ensure_ascii=False))
+        return 0
+
+    if not revisions:
+        print(f"# {root.name}: no applied revisions yet")
+        return 0
+
+    print(f"# {root.name}: {len(revisions)} applied revision(s) — newest last")
+    header = f"{'rev':>4}  {'when':<20}  {'by skill':<22}  {'change':<10}  keys"
+    print(header)
+    print("-" * len(header))
+    for rev in revisions:
+        when = (rev.ts or "")[:19].replace("T", " ")
+        keys = ", ".join(rev.touched())
+        if len(keys) > 40:
+            keys = keys[:37] + "..."
+        print(f"{rev.n:>4}  {when:<20}  {(rev.skill or '-')[:22]:<22}  {rev.summary():<10}  {keys}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -716,6 +771,19 @@ def _build_parser() -> argparse.ArgumentParser:
     p_where.add_argument("resource_id", help="Full or prefix resource id to look up")
     p_where.add_argument("--json", action="store_true", help="Emit raw JSONL")
 
+    # history
+    p_history = sub.add_parser(
+        "history", help="Show a project's applied-state revisions (helm-history style)"
+    )
+    p_history.add_argument(
+        "project", nargs="?", default=None,
+        metavar="SLUG", help="Project slug or path (default: the current project)"
+    )
+    p_history.add_argument(
+        "--revision", type=int, metavar="N", help="Show the detail of revision N"
+    )
+    p_history.add_argument("--json", action="store_true", help="Emit raw JSONL")
+
     return parser
 
 
@@ -734,6 +802,7 @@ _SUBCOMMAND_MAP = {
     "rebuild-index": cmd_rebuild_index,
     "inventory": cmd_inventory,
     "where": cmd_where,
+    "history": cmd_history,
 }
 
 

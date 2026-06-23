@@ -520,7 +520,7 @@ A central log with holes is the most dangerous kind: it reads as authoritative w
 ## D-012 — Central applied-state inventory + applied-revisions
 
 **Date:** 2026-06-23
-**Status:** C (inventory) Accepted & implemented; D (applied-revisions) Proposed/deferred
+**Status:** C (inventory) + D (applied-revisions) implemented; rollback deferred
 
 > **Update.** C is built: `lib/inventory.py` projects each project's state files
 > (`passport.json` / `.awf/infra.json`, source of truth) joined with its event log
@@ -529,8 +529,15 @@ A central log with holes is the most dangerous kind: it reads as authoritative w
 > because `api.call` is emitted unevenly (cloudflare/fathom don't), so the log
 > alone would miss the most common S1 resources. Provenance resolves per-resource:
 > precise `api.call` match → latest `state.change` whose after-state contains the
-> id → latest `state.change` overall. D (numbered revisions + rollback) remains
-> deferred per the reasoning below.
+> id → latest `state.change` overall.
+>
+> D is built too: `lib/revisions.py` numbers each project's `state.change` events
+> into applied-revisions (the `helm history` model), surfaced via
+> `awf-log history [<project>] [--revision N]`. Each revision carries the skill,
+> session, time, and the added/removed/changed top-level keys (from the
+> `state.change` diff). **Rollback itself remains deferred** — un-applying is
+> provider-specific (deleting a Cloudflare zone ≠ deleting a Neon branch) and
+> earns its own decision when a concrete revert need appears.
 
 **Context.** The operator wants "a central place to understand what has been applied, and how and where." After D-011, capture is complete and trustworthy, and three layers exist: the per-project **journal** (`.awf/log.jsonl`), per-project **state** (`passport.json` / `.awf/infra.json`), and a cross-project **activity index** (`~/.config/awf/sessions.jsonl`, one line per session). What is missing is a **resource-grained, cross-project view**: the activity index answers "what did I *do* this month," not "which projects have a live Cloudflare zone / Hetzner server / Neon project," "what is the current applied state of project X," or "where does resource `srv_123` live." That is an *inventory* question, and we have a journal, not an inventory.
 
