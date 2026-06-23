@@ -156,6 +156,42 @@ Don't pre-extract. Wait for the second use.
 
 ---
 
+## Developer tooling: the Cloudflare Docs MCP
+
+When authoring or debugging `lib/cf/` code (DNS, zones, bulk redirects,
+rulesets), Cloudflare publishes a public, no-auth remote MCP server that
+gives Claude up-to-date Cloudflare API reference in-session:
+`https://docs.mcp.cloudflare.com/mcp`.
+
+This is a **developer/ops assist, not a skill dependency**. Keep the
+boundary clear:
+
+- **Skills never call the MCP.** Every Cloudflare mutation goes through
+  `lib/cf/` direct-API functions with the search-or-create idempotency
+  contract (A1, A5). MCP tools are interactive and session-bound — they
+  have no concept of `passport.json` gates, layered config, or
+  resumability, so they cannot replace a skill script.
+- **The MCP only helps the human + Claude** when writing or debugging
+  Cloudflare code, or fielding Cloudflare questions in any session.
+- **Register it globally, not per-project or via `install.sh`.** It is a
+  harness convenience for the operator, not an artifact that ships with
+  the skills. Auto-registering MCP servers during install would mutate
+  the user's harness config silently — don't.
+
+  ```bash
+  claude mcp add --scope user cloudflare-docs \
+      --transport http https://docs.mcp.cloudflare.com/mcp
+  ```
+
+Cloudflare also offers domain-specific MCP servers (bindings,
+observability, DNS analytics, etc.). None are required by this suite;
+our scripted pipeline deliberately owns those operations through `lib/`
+so they stay idempotent and resumable. `skill_loop` is likewise *not*
+involved here — it observes skills read-only to spot routing gaps; it is
+not a config-distribution mechanism.
+
+---
+
 ## What goes in the SKILL.md *body* vs in scripts
 
 Body (Markdown, read by Claude):

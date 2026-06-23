@@ -35,8 +35,12 @@ from pathlib import Path
 AWF_HOME = Path(
     os.environ.get("AWF_HOME") or Path(__file__).resolve().parents[3]
 ).resolve()
+# Repo root first (so `from lib import log` shares passport.py's lib.log
+# module + ContextVars), then lib/ for sibling imports.
+sys.path.insert(0, str(AWF_HOME))
 sys.path.insert(0, str(AWF_HOME / "lib"))
 
+from lib import log  # noqa: E402
 from awf_home import find_awf_home, AwfHomeNotFound  # noqa: E402
 from passport import Passport, PASSPORT_FILENAME  # noqa: E402
 from slug import normalize_domain, domain_to_project_name  # noqa: E402
@@ -179,44 +183,56 @@ def main(argv: list[str]) -> int:
     target_dir.mkdir(parents=True, exist_ok=True)
     print(f"- target: {target_dir}")
 
-    # Build passport before any template overlay so existing-passport
-    # behaviour (with --force) preserves it via the overlay's
-    # preserve-list (which should include passport.json).
-    if (target_dir / PASSPORT_FILENAME).is_file():
-        passport = Passport.load(target_dir)
-        # Refresh derived fields in case the user manually wrote a stub.
-        passport.domain = domain
-        passport.project_name = slug
-        passport.site_url = f"https://{domain}"
-    else:
-        passport = Passport.new(
-            domain=domain,
-            template_version=template.version if template else "0.0",
-        )
+    # Scaffolding is the project's birth. We open the session with
+    # start=target_dir so the session summary lands in the central index and
+    # subsequent saves route to <target_dir>/.awf/log.jsonl. Note (D-011): on a
+    # truly-fresh project there is no project marker at session entry, so the
+    # very first passport write may route to the orphan log — an accepted
+    # birth-event limitation; git also records the scaffold, and re-runs
+    # (--force) log to the project.
+    with log.session(composer="awf-create-project", target="landing", start=target_dir):
+        with log.invoke(
+            skill="awf-create-project",
+            args={"domain": domain, "slug": slug, "force": opts["force"]},
+        ):
+            # Build passport before any template overlay so existing-passport
+            # behaviour (with --force) preserves it via the overlay's
+            # preserve-list (which should include passport.json).
+            if (target_dir / PASSPORT_FILENAME).is_file():
+                passport = Passport.load(target_dir)
+                # Refresh derived fields in case the user manually wrote a stub.
+                passport.domain = domain
+                passport.project_name = slug
+                passport.site_url = f"https://{domain}"
+            else:
+                passport = Passport.new(
+                    domain=domain,
+                    template_version=template.version if template else "0.0",
+                )
 
-    if template is None:
-        write_minimal_project(target_dir, passport)
-    else:
-        # Apply template, then write/refresh passport (template may have
-        # shipped a passport.json template, but ours wins).
-        changes = apply_overlay(template, target_dir, dry_run=False)
-        n_create = sum(1 for c in changes if c.kind == "create")
-        n_modify = sum(1 for c in changes if c.kind == "modify")
-        n_preserve = sum(1 for c in changes if c.kind == "preserved")
-        n_unchanged = sum(1 for c in changes if c.kind == "unchanged")
-        print(
-            f"- overlay: {n_create} created, {n_modify} modified, "
-            f"{n_preserve} preserved, {n_unchanged} unchanged"
-        )
-        passport.template_version = template.version
-        passport.save(target_dir)
-        print(f"- wrote {PASSPORT_FILENAME}")
+            if template is None:
+                write_minimal_project(target_dir, passport)
+            else:
+                # Apply template, then write/refresh passport (template may have
+                # shipped a passport.json template, but ours wins).
+                changes = apply_overlay(template, target_dir, dry_run=False)
+                n_create = sum(1 for c in changes if c.kind == "create")
+                n_modify = sum(1 for c in changes if c.kind == "modify")
+                n_preserve = sum(1 for c in changes if c.kind == "preserved")
+                n_unchanged = sum(1 for c in changes if c.kind == "unchanged")
+                print(
+                    f"- overlay: {n_create} created, {n_modify} modified, "
+                    f"{n_preserve} preserved, {n_unchanged} unchanged"
+                )
+                passport.template_version = template.version
+                passport.save(target_dir)
+                print(f"- wrote {PASSPORT_FILENAME}")
 
-    if not opts["no_git"]:
-        try:
-            init_git(target_dir)
-        except subprocess.CalledProcessError as e:
-            print(f"- WARN: git init/commit failed: {e}")
+            if not opts["no_git"]:
+                try:
+                    init_git(target_dir)
+                except subprocess.CalledProcessError as e:
+                    print(f"- WARN: git init/commit failed: {e}")
 
     print()
     print(_color(f"Project scaffolded at: {target_dir}", GREEN))

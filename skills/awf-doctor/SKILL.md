@@ -1,6 +1,6 @@
 ---
 name: awf-doctor
-description: Validate the awf-skills runtime — required CLIs, credentials, OAuth tokens, git/npm hygiene. Run before any awf-* skill that mutates remote state, or whenever an awf-* skill fails with a credential or environment error.
+description: Validate (read-only) an existing awf-skills runtime — required CLIs, credentials, OAuth tokens, git/npm hygiene. Diagnoses; does not create config — awf-init does first-time setup. Run before any awf-* skill that mutates remote state, or whenever an awf-* skill fails with a credential or environment error.
 ---
 
 # LLM directive

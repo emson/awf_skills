@@ -5,9 +5,12 @@ project anchor and passport are its current state. Together they
 support debugging, LLM session handover, drift detection, resumption,
 rollback, and audit — without external infrastructure.
 
-> Status: design accepted (D-002). `lib/log.py` and the `awf-log`
-> skill build out as the first S3 composer needs them. Existing S1
-> skills will be retrofitted opportunistically, not urgently.
+> Status: design accepted (D-002); adoption enforced (D-011). `lib/log.py`
+> and `awf-log` are built. `Passport.save()` now auto-emits `state.change`
+> (mirroring `lib/state.py`), and every state-mutating skill wraps its work
+> in `log.session(...)` — enforced by `tools/loglint.py` +
+> `tests/test_log_coverage.py`. A central applied-state inventory and
+> applied-revisions are reasoned but deferred (D-012).
 
 ---
 

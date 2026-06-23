@@ -1,6 +1,6 @@
 ---
 name: awf-init
-description: First-time onboarding for awf-skills — create ~/.config/awf/.env from the template, prompt for missing credentials, ensure AWF_HOME is exported in the shell rc. Run once after install.sh, or any time after pulling new credentials. Idempotent.
+description: First-time onboarding for awf-skills — create ~/.config/awf/.env from the template, prompt for missing credentials, ensure AWF_HOME is exported in the shell rc. Sets up config; awf-doctor only validates an existing setup. Run once after install.sh, or any time after pulling new credentials. Idempotent.
 ---
 
 # Purpose

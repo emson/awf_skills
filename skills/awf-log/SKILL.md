@@ -1,6 +1,6 @@
 ---
 name: awf-log
-description: CLI window onto the awf event log. Query, tail, search, annotate, and replay event history for the current project. Use when you need to inspect what happened in a session, find an event, or add a manual note.
+description: CLI window onto the awf event log and the cross-project applied-state inventory. Query, tail, search, annotate, and replay per-project event history; or list/locate applied resources across all projects (inventory, where, rebuild-index). Use to inspect what happened in a session, find an event, add a note, or answer "what has been applied, how, and where."
 ---
 
 # Purpose
@@ -9,7 +9,12 @@ description: CLI window onto the awf event log. Query, tail, search, annotate, a
 the append-only event log created by `lib/log.py`. It surfaces per-project history
 that would otherwise require raw `cat .awf/log.jsonl | jq` commands.
 
-The seven sub-commands map directly to the operations documented in `docs/08-logging.md`.
+The per-project sub-commands map to the operations documented in
+`docs/08-logging.md`. Three further sub-commands (`rebuild-index`,
+`inventory`, `where`) expose the **cross-project applied-state inventory**
+(`lib/inventory.py`, D-012): a projection that joins each project's state
+files (`passport.json` / `.awf/infra.json`, the source of truth) with its
+event log (for provenance) into one view of every applied resource.
 
 ---
 
@@ -111,6 +116,46 @@ uv run "$AWF_HOME/skills/awf-log/scripts/log.py" sessions [--days 30] [--json]
 |------|---------|-------------|
 | `--days N` | `30` | Limit to sessions started within the last N days |
 | `--json` | `false` | Emit raw JSONL |
+
+---
+
+## `rebuild-index`
+
+Re-scan every known project (discovered from `sessions.jsonl`, plus the current
+project) and rewrite the applied-state inventory cache at
+`~/.config/awf/inventory.jsonl`. The per-project state files are always the
+source of truth; this only refreshes the cache, so it is safe to run any time
+(Terraform `refresh` analogue). Run after a launch, or whenever the inventory
+looks stale.
+
+```
+uv run "$AWF_HOME/skills/awf-log/scripts/log.py" rebuild-index [--json]
+```
+
+## `inventory [--provider NAME] [--project SLUG]`
+
+List every applied resource across all projects — provider, type, resource id,
+the skill that applied it, and when. Answers "what has been applied, and where."
+Auto-builds the cache on first use if absent.
+
+```
+uv run "$AWF_HOME/skills/awf-log/scripts/log.py" inventory [--provider cloudflare] [--project my-site] [--json]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--provider NAME` | (all) | Filter to one provider (`cloudflare`, `neon`, `hetzner`, `fathom`, `kamal`, …) |
+| `--project SLUG` | (all) | Filter to one project (slug or path) |
+| `--json` | `false` | Emit raw JSONL |
+
+## `where <resource_id>`
+
+Reverse lookup: which project a resource id belongs to (full or prefix match),
+with its provenance. Answers "where does `srv_123` live, and who applied it?"
+
+```
+uv run "$AWF_HOME/skills/awf-log/scripts/log.py" where <resource_id> [--json]
+```
 
 ---
 

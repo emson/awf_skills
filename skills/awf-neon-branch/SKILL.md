@@ -1,6 +1,6 @@
 ---
 name: awf-neon-branch
-description: Provision one Neon Postgres branch on an existing project. Writes branch_id and branch_name into .awf/infra.json (Infra.neon). Idempotent — re-running with the same name is a no-op.
+description: Provision one Neon Postgres branch on an existing project (created first by awf-neon-project). Use for each additional branch; awf-neon-project creates the parent project itself. Writes branch_id and branch_name into .awf/infra.json (Infra.neon). Idempotent — re-running with the same name is a no-op.
 ---
 
 # Purpose

@@ -451,6 +451,11 @@ concrete need.
   [`notes/concepts-and-priorities.md`](notes/concepts-and-priorities.md#definitive-cheap-what-else-is-missing).
   Each tier-1 item (`awf-cost`, `awf-teardown` + idle detection,
   multi-env via Neon branches) will earn its own D-NNN when built.
+- **D-OPEN-K — Remote/shared log + inventory sink.** Whether to ship
+  the journal and the D-012 inventory to a remote backend (Cloudflare
+  D1/KV, or a private git repo) for cross-machine/team visibility and
+  laptop-loss durability. Local-first today (D-002); decide when a
+  second machine or a collaborator appears. Must stay opt-in.
 
 ---
 
@@ -475,3 +480,75 @@ concrete need.
 - *Track in `Infra` per-project:* Correct for S4 project-specific servers, but the shared server state belongs in `Shared`, not per-project `Infra`. Deferred to S4.
 
 **Revisit if.** S4 introduces project-specific Hetzner servers; those need similar tracking in `Infra.kamal` rather than `Shared`. At that point, extend `Infra.kamal` with `setup_done_for_server_id` and update `awf-kamal-setup` to check both locations.
+
+---
+
+## D-011 — Logging adoption is an enforced contract, not a convention
+
+**Date:** 2026-06-23
+**Status:** Accepted
+
+**Context.** D-002 designed a complete logging model (event schema, redaction, ULID session threading, durability) and `lib/log.py` implemented it. But adoption lagged the design: 12 of ~29 skill scripts never called the logger, and they were exactly the common S1 launch path (`setup-domain`, `setup-gsc`, `deploy`, `create-project`, `setup-nameservers`, `submit-bing`, `verify-gsc`, `review-passport`, `setup-analytics`, `update-template`). Worse, two failure modes compounded:
+
+1. **`lib/passport.py:save()` did not emit `state.change`** — only `lib/state.py` (Infra/anchor/shared) auto-emitted. The S1 skills all mutate `passport.json`, so their state changes were invisible to the log entirely.
+2. **`state.change` only routes to the project's `.awf/log.jsonl` when a `log.session(...)` is active** (it sets `_current_project_root`). Outside a session it falls back to `~/.config/awf/orphan-log.jsonl`. That orphan file had grown to ~1.6 MB of unattributed events — direct evidence of the gap.
+
+A central log with holes is the most dangerous kind: it reads as authoritative while silently omitting half the launch pipeline. Anything built on top (inventory, drift detection, audit) inherits the blind spots.
+
+**Decision.**
+
+1. **Fix the source, not each call site.** `Passport.save()` now computes a before/after whole-file diff and calls `log.state_change` best-effort, exactly mirroring `lib/state.py:_save_impl`. Every passport mutation is captured without any skill remembering to log it (A1/DRY).
+2. **State-mutating skills must establish a session.** Any skill whose script calls `.save(` (a state model) or `apply_overlay(` must wrap its work in `log.session(..., start=<project_root>)` + `log.invoke(...)`. The session routes the auto-emitted `state.change` to the project log and attributes it to the skill; `invoke` adds `skill.invoke`/`skill.complete` with timing, args (redacted), and result.
+3. **Enforce it.** `tools/loglint.py` is a text-scan CI guard that flags any state-mutating skill lacking `log.session(`; `tests/test_log_coverage.py` asserts zero violations so a regression fails the suite. Enforcement, not documentation, keeps the contract.
+4. **Manual gates emit `log.gate`.** Where a skill pauses for human action (registrar nameserver swap + propagation, Bing Webmaster import, GSC DNS-propagation/verify), it calls `log.gate(...)` so the gate is first-class in the log (A14).
+5. **Bootstrap path identity.** Skill scripts insert the repo root on `sys.path` *before* `lib/` and import `from lib import log`, so the skill and `passport.py` share the *same* `lib.log` module (and its ContextVars). Importing `lib/` contents as top-level modules would create a second `log` module with separate context — session threading would silently break.
+6. **Allowlist.** `awf-init` (writes global `~/.config/awf/.env`, no project) and `awf-install` (npm only, no `.awf/` state) are exempt — they mutate non-project state, so no project log applies.
+
+**Known limitation (accepted).** `awf-create-project` *births* the project, so at session entry no project marker exists yet and the very first passport write may route to the orphan log. The session summary still lands in the central index, git records the scaffold, and all re-runs (`--force`) and subsequent skills log correctly. Documented in the script.
+
+**Alternatives rejected.**
+
+- *Add a manual `log.state_change` to each skill.* Forgettable by construction — the exact failure we were fixing. Source-level auto-emit can't be skipped.
+- *Leave logging best-effort/optional.* Orphan-log accumulation showed "optional" decays to "absent" for the high-volume path.
+- *Make logging raise on failure to force adoption.* Violates the load-bearing rule "logging never raises" (D-002). Enforcement belongs in CI (loglint), not at runtime.
+- *Per-key `state.change` instead of whole-file.* `lib/log.py` already caps/hashes oversized diffs; whole-file (`key=""`) matches `lib/state.py` and keeps one contract. Fine-grained keys remain reserved for future need.
+
+**Revisit if.** A skill legitimately mutates project state without a resolvable project (extend the allowlist with a justification comment). Or the lint's text heuristic produces false positives/negatives (e.g. a `.save(` on a non-state object) — at that point teach `loglint.py` to look at imports/AST rather than substrings.
+
+---
+
+## D-012 — Central applied-state inventory + applied-revisions
+
+**Date:** 2026-06-23
+**Status:** C (inventory) Accepted & implemented; D (applied-revisions) Proposed/deferred
+
+> **Update.** C is built: `lib/inventory.py` projects each project's state files
+> (`passport.json` / `.awf/infra.json`, source of truth) joined with its event log
+> (provenance) into `~/.config/awf/inventory.jsonl`, a rebuildable cache. Surfaced
+> via `awf-log rebuild-index` / `inventory` / `where`. State files are the source
+> because `api.call` is emitted unevenly (cloudflare/fathom don't), so the log
+> alone would miss the most common S1 resources. Provenance resolves per-resource:
+> precise `api.call` match → latest `state.change` whose after-state contains the
+> id → latest `state.change` overall. D (numbered revisions + rollback) remains
+> deferred per the reasoning below.
+
+**Context.** The operator wants "a central place to understand what has been applied, and how and where." After D-011, capture is complete and trustworthy, and three layers exist: the per-project **journal** (`.awf/log.jsonl`), per-project **state** (`passport.json` / `.awf/infra.json`), and a cross-project **activity index** (`~/.config/awf/sessions.jsonl`, one line per session). What is missing is a **resource-grained, cross-project view**: the activity index answers "what did I *do* this month," not "which projects have a live Cloudflare zone / Hetzner server / Neon project," "what is the current applied state of project X," or "where does resource `srv_123` live." That is an *inventory* question, and we have a journal, not an inventory.
+
+The shape recurs across cloud CLIs: separate the journal from materialized state, then provide a projection/history view. Helm `helm history` (numbered revisions + rollback), Pulumi `stack history` (who/when/what across stacks), Terraform state-as-truth + `state list` + remote backend, AWS CloudTrail (centralized API-call record), kubectl `last-applied-configuration` (declarative drift). We already have Terraform's *state* and CloudTrail's *journal*; we lack Helm/Pulumi's *history projection*.
+
+**Decision (proposed).**
+
+- **C — Materialized inventory.** A `~/.config/awf/inventory.jsonl` (or small SQLite) with one record per applied resource: `{project, stage, provider, resource_type, resource_id, applied_by_skill, session, ts, last_seen}`. It is **built by projecting the `state.change` / `api.call` events we already capture** — a reducer, not new instrumentation. Per-project `infra.json` / `passport.json` remain the **source of truth**; the inventory is a **rebuildable cache** with an `awf-log rebuild-index` (Terraform `refresh` analogue) that re-scans known projects, so a stale/corrupt index or a moved/renamed/deleted project is never fatal. New read surfaces: `awf-log inventory [--provider] [--project]` (≈ `state list`), `awf-log where <resource_id>` (reverse lookup), and finishing the `diff` stub into kubectl-style applied-vs-reality drift.
+- **D — Applied-revisions.** Group each project's `state.change`s into an incrementing revision (`helm history` model): `awf-log history <project>` shows revision N, its diff from N-1, and the session/skill that produced it. This is the groundwork for rollback without committing to rollback now.
+
+**Reasoning.** Both C and D are *projections over data already captured post-D-011* — the heavy lifting (capture, schema, redaction, session threading) is done; what's missing is a reducer and a few read commands, not new infrastructure. Both stay local-first, consistent with the suite's "observability without external infrastructure" stance (D-002). The source-of-truth discipline (project files win; central index is a cache) is the Terraform lesson that prevents the inventory from becoming an authoritative-but-wrong second copy.
+
+**Alternatives rejected (for now).**
+
+- *Make `sessions.jsonl` the inventory.* It is activity-grained; bolting resource state onto session summaries conflates "what happened" with "what is." Keep them separate (A11).
+- *Remote/shared sink (Pulumi-Service / Terraform-Cloud style).* Real value only multi-machine/team; conflicts with local-first. Deferred to **D-OPEN-K** below — opt-in ship of the journal to Cloudflare D1/KV or a private git repo, if/when a second machine or teammate appears.
+- *Build rollback (D) eagerly.* Revisions are cheap; rollback is a large, provider-specific surface (un-applying a Cloudflare zone ≠ un-applying a Neon branch). Record revisions now; build rollback when actually needed.
+
+**Revisit / build triggers.** Build **C** at the first real "where is X / what's applied across my projects" need, or once the project count makes per-project inspection tedious. Build **D** when a concrete rollback or "diff from last good" need appears. Promote **D-OPEN-K** when a second machine or collaborator enters the picture.
+
+**Sequencing note.** D-011 (adoption + enforcement) is the prerequisite and is done. C is the highest-leverage next step and should precede D and the read-surface polish.

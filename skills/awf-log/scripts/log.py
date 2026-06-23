@@ -6,7 +6,8 @@
 
 """awf-log — CLI window onto the awf event log.
 
-Sub-commands: tail, session, find, diff, note, replay, sessions.
+Sub-commands: tail, session, find, diff, note, replay, sessions,
+rebuild-index, inventory, where.
 
 Exit codes:
     0  — success (including empty results)
@@ -47,6 +48,7 @@ from lib.log import (  # noqa: E402
 )
 from lib.project import ProjectNotFound, find_project_root  # noqa: E402
 from lib.state import ProjectAnchor  # noqa: E402
+from lib import inventory as inventory_lib  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -548,6 +550,101 @@ def cmd_sessions(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Sub-command: rebuild-index (refresh the applied-state inventory cache)
+# ---------------------------------------------------------------------------
+
+
+def cmd_rebuild_index(args: argparse.Namespace) -> int:
+    """Re-scan known projects and rewrite the inventory cache (D-012)."""
+    config_dir = user_config_dir()
+    # Include the current project even if it has no session in the index yet.
+    extra: list[Path] = []
+    cur = _find_project_root_optional()
+    if cur is not None:
+        extra.append(cur)
+    records = inventory_lib.rebuild_inventory(config_dir, extra_roots=extra)
+    n_projects = len({r.project_path for r in records})
+    if args.json:
+        print(jsonlib.dumps({"action": "rebuilt", "resources": len(records), "projects": n_projects}))
+    else:
+        print(f"- rebuilt inventory: {len(records)} resources across {n_projects} project(s)")
+        print(f"  {config_dir / inventory_lib.INVENTORY_FILENAME}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Sub-command: inventory (list applied resources across projects)
+# ---------------------------------------------------------------------------
+
+
+def _load_or_build_inventory() -> list:
+    """Load the cache; if empty/absent, build it once so the view is never blank."""
+    config_dir = user_config_dir()
+    records = inventory_lib.load_inventory(config_dir)
+    if not records:
+        extra: list[Path] = []
+        cur = _find_project_root_optional()
+        if cur is not None:
+            extra.append(cur)
+        records = inventory_lib.rebuild_inventory(config_dir, extra_roots=extra)
+    return records
+
+
+def cmd_inventory(args: argparse.Namespace) -> int:
+    """List applied resources, optionally filtered by provider/project."""
+    records = _load_or_build_inventory()
+    if args.provider:
+        records = [r for r in records if r.provider == args.provider]
+    if args.project:
+        records = [r for r in records if args.project in (r.project, r.project_path)]
+
+    if args.json:
+        for r in records:
+            print(jsonlib.dumps(r.__dict__, separators=(",", ":"), ensure_ascii=False))
+        return 0
+
+    if not records:
+        print("# no applied resources found (run `awf-log rebuild-index`)")
+        return 0
+
+    header = f"{'project':<16}  {'provider':<10}  {'type':<13}  {'resource_id':<26}  {'by skill':<22}  applied"
+    print(header)
+    print("-" * len(header))
+    for r in sorted(records, key=lambda x: (x.project, x.provider, x.resource_type)):
+        applied = (r.last_applied or "")[:19].replace("T", " ")
+        rid = r.resource_id if len(r.resource_id) <= 26 else r.resource_id[:23] + "..."
+        print(
+            f"{r.project[:16]:<16}  {r.provider[:10]:<10}  {r.resource_type[:13]:<13}  "
+            f"{rid:<26}  {(r.applied_by_skill or '-')[:22]:<22}  {applied}"
+        )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Sub-command: where (reverse-lookup a resource id → project)
+# ---------------------------------------------------------------------------
+
+
+def cmd_where(args: argparse.Namespace) -> int:
+    """Find which project(s) a resource id belongs to."""
+    records = _load_or_build_inventory()
+    hits = inventory_lib.where(records, args.resource_id)
+    if args.json:
+        for r in hits:
+            print(jsonlib.dumps(r.__dict__, separators=(",", ":"), ensure_ascii=False))
+        return 0
+    if not hits:
+        print(f"# no resource matching {args.resource_id!r} (try `awf-log rebuild-index`)")
+        return 0
+    for r in hits:
+        print(f"{r.resource_id}  ({r.provider}/{r.resource_type})")
+        print(f"    project: {r.project}  @ {r.project_path}")
+        if r.applied_by_skill:
+            print(f"    applied by {r.applied_by_skill} at {r.last_applied} (session {r.session})")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -602,6 +699,23 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_sessions.add_argument("--json", action="store_true", help="Emit raw JSONL")
 
+    # rebuild-index
+    p_rebuild = sub.add_parser(
+        "rebuild-index", help="Re-scan known projects and refresh the applied-state inventory"
+    )
+    p_rebuild.add_argument("--json", action="store_true", help="Emit a JSON summary")
+
+    # inventory
+    p_inv = sub.add_parser("inventory", help="List applied resources across all projects")
+    p_inv.add_argument("--provider", metavar="NAME", help="Filter by provider (cloudflare, neon, ...)")
+    p_inv.add_argument("--project", metavar="SLUG", help="Filter by project slug or path")
+    p_inv.add_argument("--json", action="store_true", help="Emit raw JSONL")
+
+    # where
+    p_where = sub.add_parser("where", help="Find which project a resource id belongs to")
+    p_where.add_argument("resource_id", help="Full or prefix resource id to look up")
+    p_where.add_argument("--json", action="store_true", help="Emit raw JSONL")
+
     return parser
 
 
@@ -617,6 +731,9 @@ _SUBCOMMAND_MAP = {
     "note": cmd_note,
     "replay": cmd_replay,
     "sessions": cmd_sessions,
+    "rebuild-index": cmd_rebuild_index,
+    "inventory": cmd_inventory,
+    "where": cmd_where,
 }
 
 

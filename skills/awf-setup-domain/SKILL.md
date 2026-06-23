@@ -1,6 +1,6 @@
 ---
 name: awf-setup-domain
-description: Set up the domain on Cloudflare — create the zone, the Pages project, the apex/www DNS records, force HTTPS, and the www→apex bulk redirect. Run after awf-create-project, before awf-setup-nameservers.
+description: Set up the domain on Cloudflare from scratch — create the zone, the Pages project, the apex/www DNS records, force HTTPS, and the www→apex bulk redirect. For a single extra record on an already-created zone, use awf-cf-dns-record instead. Run after awf-create-project, before awf-setup-nameservers.
 ---
 
 # Purpose

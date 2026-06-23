@@ -29,8 +29,12 @@ from pathlib import Path
 AWF_HOME = Path(
     os.environ.get("AWF_HOME") or Path(__file__).resolve().parents[3]
 ).resolve()
+# Repo root first (so `from lib import log` shares passport.py's lib.log
+# module + ContextVars), then lib/ for sibling imports.
+sys.path.insert(0, str(AWF_HOME))
 sys.path.insert(0, str(AWF_HOME / "lib"))
 
+from lib import log  # noqa: E402
 from project import find_project_root, ProjectNotFound  # noqa: E402
 from passport import Passport, SCHEMA_VERSION_CURRENT  # noqa: E402
 from awf_home import find_awf_home, AwfHomeNotFound  # noqa: E402
@@ -74,6 +78,7 @@ def parse_args(argv: list[str]) -> dict:
 def main(argv: list[str]) -> int:
     opts = parse_args(argv)
 
+    # Resolve project root OUTSIDE the session (plan_004 lesson M1).
     try:
         project_root = find_project_root()
     except ProjectNotFound as e:
@@ -86,89 +91,96 @@ def main(argv: list[str]) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
-    passport = Passport.load(project_root)
+    with log.session(
+        composer="awf-update-template", target="landing", start=project_root
+    ):
+        with log.invoke(
+            skill="awf-update-template",
+            args={"to": opts["to"], "dry_run": opts["dry_run"], "force": opts["force"]},
+        ):
+            passport = Passport.load(project_root)
 
-    try:
-        target = resolve_template(awf_home, name_or_dir=opts["to"])
-    except (TemplateNotFound, TemplateError) as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 1
+            try:
+                target = resolve_template(awf_home, name_or_dir=opts["to"])
+            except (TemplateNotFound, TemplateError) as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
 
-    current_v = passport.template_version or "0.0"
-    print(f"- current template_version: {current_v}")
-    print(f"- target template:          {target.name} v{target.version}")
+            current_v = passport.template_version or "0.0"
+            print(f"- current template_version: {current_v}")
+            print(f"- target template:          {target.name} v{target.version}")
 
-    # Schema-compatibility check (A11).
-    if _version_tuple(target.passport_schema) > _version_tuple(SCHEMA_VERSION_CURRENT):
-        print(
-            f"error: target template requires passport schema "
-            f"{target.passport_schema}, but this awf-skills understands "
-            f"{SCHEMA_VERSION_CURRENT}. Update awf-skills first.",
-            file=sys.stderr,
-        )
-        return 1
-
-    # Version comparison.
-    try:
-        is_upgrade = _version_tuple(target.version) > _version_tuple(current_v)
-    except ValueError:
-        is_upgrade = True  # malformed current version; treat as upgradable
-
-    if not is_upgrade and not opts["force"]:
-        print(
-            _color(
-                f"- nothing to do: target v{target.version} ≤ current v{current_v}. "
-                f"Pass --force to re-apply or downgrade.",
-                YELLOW,
-            )
-        )
-        return 0
-
-    changes = apply_overlay(target, project_root, dry_run=True)
-    by_kind: dict[str, list[str]] = {}
-    for c in changes:
-        by_kind.setdefault(c.kind, []).append(c.relpath)
-
-    print()
-    for kind in ("create", "modify", "preserved", "unchanged"):
-        files = by_kind.get(kind, [])
-        if not files:
-            continue
-        print(f"  {kind:10s} ({len(files)})")
-        if kind in ("create", "modify"):
-            for rel in sorted(files)[:20]:
-                print(f"    {rel}")
-            if len(files) > 20:
-                print(f"    … and {len(files) - 20} more")
-    print()
-
-    if opts["dry_run"]:
-        print(_color("dry-run; no files changed.", YELLOW))
-        return 0
-
-    if (by_kind.get("create") or by_kind.get("modify")):
-        apply_overlay(target, project_root, dry_run=False)
-
-    passport.template_version = target.version
-    passport.save(project_root)
-    print(_color(f"- template_version: {current_v} → {target.version}", GREEN))
-
-    # Git commit (best-effort).
-    if shutil.which("git") and (project_root / ".git").exists():
-        try:
-            subprocess.run(["git", "add", "."], cwd=project_root, check=True)
-            r = subprocess.run(
-                ["git", "diff", "--cached", "--quiet"], cwd=project_root,
-            )
-            if r.returncode != 0:  # there are staged changes
-                subprocess.run(
-                    ["git", "commit", "-q", "-m",
-                     f"template: v{current_v} → v{target.version}"],
-                    cwd=project_root, check=True,
+            # Schema-compatibility check (A11).
+            if _version_tuple(target.passport_schema) > _version_tuple(SCHEMA_VERSION_CURRENT):
+                print(
+                    f"error: target template requires passport schema "
+                    f"{target.passport_schema}, but this awf-skills understands "
+                    f"{SCHEMA_VERSION_CURRENT}. Update awf-skills first.",
+                    file=sys.stderr,
                 )
-                print(f"- git: committed template upgrade")
-        except subprocess.CalledProcessError as e:
-            print(f"- WARN: git commit failed: {e}")
+                return 1
+
+            # Version comparison.
+            try:
+                is_upgrade = _version_tuple(target.version) > _version_tuple(current_v)
+            except ValueError:
+                is_upgrade = True  # malformed current version; treat as upgradable
+
+            if not is_upgrade and not opts["force"]:
+                print(
+                    _color(
+                        f"- nothing to do: target v{target.version} ≤ current v{current_v}. "
+                        f"Pass --force to re-apply or downgrade.",
+                        YELLOW,
+                    )
+                )
+                return 0
+
+            changes = apply_overlay(target, project_root, dry_run=True)
+            by_kind: dict[str, list[str]] = {}
+            for c in changes:
+                by_kind.setdefault(c.kind, []).append(c.relpath)
+
+            print()
+            for kind in ("create", "modify", "preserved", "unchanged"):
+                files = by_kind.get(kind, [])
+                if not files:
+                    continue
+                print(f"  {kind:10s} ({len(files)})")
+                if kind in ("create", "modify"):
+                    for rel in sorted(files)[:20]:
+                        print(f"    {rel}")
+                    if len(files) > 20:
+                        print(f"    … and {len(files) - 20} more")
+            print()
+
+            if opts["dry_run"]:
+                print(_color("dry-run; no files changed.", YELLOW))
+                return 0
+
+            if (by_kind.get("create") or by_kind.get("modify")):
+                apply_overlay(target, project_root, dry_run=False)
+
+            passport.template_version = target.version
+            passport.save(project_root)
+            print(_color(f"- template_version: {current_v} → {target.version}", GREEN))
+
+            # Git commit (best-effort).
+            if shutil.which("git") and (project_root / ".git").exists():
+                try:
+                    subprocess.run(["git", "add", "."], cwd=project_root, check=True)
+                    r = subprocess.run(
+                        ["git", "diff", "--cached", "--quiet"], cwd=project_root,
+                    )
+                    if r.returncode != 0:  # there are staged changes
+                        subprocess.run(
+                            ["git", "commit", "-q", "-m",
+                             f"template: v{current_v} → v{target.version}"],
+                            cwd=project_root, check=True,
+                        )
+                        print(f"- git: committed template upgrade")
+                except subprocess.CalledProcessError as e:
+                    print(f"- WARN: git commit failed: {e}")
 
     return 0
 

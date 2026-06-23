@@ -56,7 +56,16 @@ def user_config_dir() -> Path:
     Exists for cross-project state (D-001 / D-003). Layered
     credential config is separate (lib.config); this is purely a
     path helper.
+
+    Honours ``$AWF_CONFIG_DIR`` when set, so tests (and any sandboxed
+    run) can redirect cross-project state — the orphan log, the
+    sessions index, shared.json — away from the real ``~/.config/awf``.
+    Without this override the test suite writes to the user's real
+    config dir (the historical cause of orphan-log bloat; D-011).
     """
+    override = os.environ.get("AWF_CONFIG_DIR")
+    if override:
+        return Path(override)
     return Path.home() / ".config" / "awf"
 
 

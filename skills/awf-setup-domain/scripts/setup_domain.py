@@ -22,8 +22,12 @@ from pathlib import Path
 AWF_HOME = Path(
     os.environ.get("AWF_HOME") or Path(__file__).resolve().parents[3]
 ).resolve()
+# Repo root first (so `from lib import log` resolves to the SAME lib.log module
+# that passport.py uses — shared ContextVars), then lib/ for sibling imports.
+sys.path.insert(0, str(AWF_HOME))
 sys.path.insert(0, str(AWF_HOME / "lib"))
 
+from lib import log  # noqa: E402
 from project import find_project_root, ProjectNotFound  # noqa: E402
 from passport import Passport  # noqa: E402
 from slug import normalize_domain, domain_to_project_name  # noqa: E402
@@ -53,51 +57,54 @@ def main(argv: list[str]) -> int:
     domain = normalize_domain(passport.domain)
     project_name = domain_to_project_name(domain)
 
-    try:
-        cf = get_client(project_root=project_root, awf_home=AWF_HOME)
-    except RuntimeError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 1
+    nameservers: list[str] = []
+    with log.session(composer="awf-setup-domain", target="landing", start=project_root):
+        with log.invoke(skill="awf-setup-domain", args={"domain": domain}):
+            try:
+                cf = get_client(project_root=project_root, awf_home=AWF_HOME)
+            except RuntimeError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
 
-    account_id = cf.config.account_id
+            account_id = cf.config.account_id
 
-    try:
-        # 1. Zone
-        zone = get_or_create_zone(cf, domain)
+            try:
+                # 1. Zone
+                zone = get_or_create_zone(cf, domain)
 
-        # 2. Pages project + custom domain
-        search_or_create_pages_project(cf, account_id, domain)
-        get_or_create_project_domain(cf, account_id, project_name, domain)
+                # 2. Pages project + custom domain
+                search_or_create_pages_project(cf, account_id, domain)
+                get_or_create_project_domain(cf, account_id, project_name, domain)
 
-        # 3. DNS records
-        create_dns_record(
-            cf, domain, "CNAME", domain, f"{project_name}.pages.dev",
-            proxied=True,
-        )
-        create_www_to_apex_redirect_record(cf, domain)
+                # 3. DNS records
+                create_dns_record(
+                    cf, domain, "CNAME", domain, f"{project_name}.pages.dev",
+                    proxied=True,
+                )
+                create_www_to_apex_redirect_record(cf, domain)
 
-        # 4. Force HTTPS
-        set_always_use_https(cf, domain)
+                # 4. Force HTTPS
+                set_always_use_https(cf, domain)
 
-        # 5. Bulk redirect www → apex
-        search_and_create_bulk_redirect(
-            cf, f"www.{domain}", f"https://{domain}",
-        )
-    except Exception as e:
-        # Surface verbatim (A13). Do not partially mark the gate.
-        print(f"error: {e}", file=sys.stderr)
-        return 1
+                # 5. Bulk redirect www → apex
+                search_and_create_bulk_redirect(
+                    cf, f"www.{domain}", f"https://{domain}",
+                )
+            except Exception as e:
+                # Surface verbatim (A13). Do not partially mark the gate.
+                print(f"error: {e}", file=sys.stderr)
+                return 1
 
-    nameservers = list(getattr(zone, "name_servers", []) or [])
-    passport.mark_gate(
-        "domain_setup",
-        meta={
-            "zone_id": getattr(zone, "id", None),
-            "nameservers": nameservers,
-            "outcome": "ok",
-        },
-    )
-    passport.save(project_root)
+            nameservers = list(getattr(zone, "name_servers", []) or [])
+            passport.mark_gate(
+                "domain_setup",
+                meta={
+                    "zone_id": getattr(zone, "id", None),
+                    "nameservers": nameservers,
+                    "outcome": "ok",
+                },
+            )
+            passport.save(project_root)
 
     print()
     if nameservers:

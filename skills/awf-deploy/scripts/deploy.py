@@ -27,8 +27,12 @@ from pathlib import Path
 AWF_HOME = Path(
     os.environ.get("AWF_HOME") or Path(__file__).resolve().parents[3]
 ).resolve()
+# Repo root first (so `from lib import log` resolves to the SAME lib.log module
+# that passport.py uses — shared ContextVars), then lib/ for sibling imports.
+sys.path.insert(0, str(AWF_HOME))
 sys.path.insert(0, str(AWF_HOME / "lib"))
 
+from lib import log  # noqa: E402
 from project import find_project_root, ProjectNotFound  # noqa: E402
 from passport import Passport  # noqa: E402
 
@@ -69,53 +73,57 @@ def main(argv: list[str]) -> int:
         print("usage: deploy.py", file=sys.stderr)
         return 2
 
+    # Resolve project root and load passport OUTSIDE the session
+    # (following the exemplar pattern in awf-setup-domain / awf-neon-project).
     try:
-        root = find_project_root()
+        project_root = find_project_root()
     except ProjectNotFound as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    if not (root / "package.json").is_file():
-        print(f"error: no package.json in {root}", file=sys.stderr)
+    if not (project_root / "package.json").is_file():
+        print(f"error: no package.json in {project_root}", file=sys.stderr)
         return 1
 
     # Pages project name comes from passport (derived from domain),
     # not from a per-project wrangler.toml. This keeps the template
     # generic — see docs/06-experimentation-guide.md §why-no-wrangler-toml.
     try:
-        passport = Passport.load(root)
+        passport = Passport.load(project_root)
     except Exception as e:
         print(f"error: could not load passport: {e}", file=sys.stderr)
         return 1
     project_name = passport.project_name
 
-    rc = _check_wrangler()
-    if rc is not None:
-        return rc
+    with log.session(composer="awf-deploy", target="landing", start=project_root):
+        with log.invoke(skill="awf-deploy", args={"project_name": project_name}):
+            rc = _check_wrangler()
+            if rc is not None:
+                return rc
 
-    _git_dirty_warn(root)
+            _git_dirty_warn(project_root)
 
-    print(f"- npm run build in {root}")
-    r = subprocess.run(["npm", "run", "build"], cwd=root)
-    if r.returncode != 0:
-        print(f"error: npm run build failed (exit {r.returncode})", file=sys.stderr)
-        return r.returncode
+            print(f"- npm run build in {project_root}")
+            r = subprocess.run(["npm", "run", "build"], cwd=project_root)
+            if r.returncode != 0:
+                print(f"error: npm run build failed (exit {r.returncode})", file=sys.stderr)
+                return r.returncode
 
-    # Pages reads the build output from `dist/` (the template's
-    # convention; the build script writes there).
-    print(f"- wrangler pages deploy --project-name={project_name} in {root}")
-    deploy_cmd = ["wrangler"] if shutil.which("wrangler") else ["npx", "wrangler"]
-    r = subprocess.run(
-        [*deploy_cmd, "pages", "deploy", "dist",
-         f"--project-name={project_name}"],
-        cwd=root,
-    )
-    if r.returncode != 0:
-        print(f"error: wrangler pages deploy failed (exit {r.returncode})", file=sys.stderr)
-        return r.returncode
+            # Pages reads the build output from `dist/` (the template's
+            # convention; the build script writes there).
+            print(f"- wrangler pages deploy --project-name={project_name} in {project_root}")
+            deploy_cmd = ["wrangler"] if shutil.which("wrangler") else ["npx", "wrangler"]
+            r = subprocess.run(
+                [*deploy_cmd, "pages", "deploy", "dist",
+                 f"--project-name={project_name}"],
+                cwd=project_root,
+            )
+            if r.returncode != 0:
+                print(f"error: wrangler pages deploy failed (exit {r.returncode})", file=sys.stderr)
+                return r.returncode
 
-    passport.mark_gate("deploy", meta={"outcome": "ok", "project_name": project_name})
-    passport.save(root)
-    return 0
+            passport.mark_gate("deploy", meta={"outcome": "ok", "project_name": project_name})
+            passport.save(project_root)
+            return 0
 
 
 if __name__ == "__main__":

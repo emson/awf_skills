@@ -1,6 +1,6 @@
 ---
 name: awf-cf-dns-record
-description: Create one Cloudflare DNS record on a zone. Writes the record ID into passport.json (cloudflare["<TYPE>:<name>"]). Idempotent — re-running with the same inputs is a no-op.
+description: Create one ad-hoc Cloudflare DNS record on an existing zone. Use for a single extra record; awf-setup-domain creates the zone and the standard apex/www records. Writes the record ID into passport.json (cloudflare["<TYPE>:<name>"]). Idempotent — re-running with the same inputs is a no-op.
 ---
 
 # Purpose

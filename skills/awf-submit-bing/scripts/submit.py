@@ -35,8 +35,11 @@ from pathlib import Path
 AWF_HOME = Path(
     os.environ.get("AWF_HOME") or Path(__file__).resolve().parents[3]
 ).resolve()
+# Repo root BEFORE lib/ so `from lib import log` shares passport.py's module/ContextVars.
+sys.path.insert(0, str(AWF_HOME))
 sys.path.insert(0, str(AWF_HOME / "lib"))
 
+from lib import log  # noqa: E402
 from project import find_project_root, ProjectNotFound  # noqa: E402
 from passport import Passport  # noqa: E402
 from slug import normalize_domain  # noqa: E402
@@ -132,66 +135,89 @@ def main(argv: list[str]) -> int:
     passport = Passport.load(project_root)
     domain = normalize_domain(passport.domain)
 
-    # ── Stage 1 ────────────────────────────────────────────────────
-    key = ensure_key(project_root, passport, opts["regenerate_key"])
+    safe_args: dict = {
+        "confirm_imported": opts["confirm_imported"],
+        "regenerate_key": opts["regenerate_key"],
+    }
 
-    # Verify the key file is live on the deployed site.
-    reachable, detail = key_file_reachable(domain, key)
-    if not reachable:
-        print(_color(f"- key file not reachable: {detail}", YELLOW))
-        print(
-            f"\nThe IndexNow key file is in your project at "
-            f"static/{key}.txt but Bing can't see it yet — you need to "
-            f"redeploy.\n"
-            f"  cd {project_root}\n"
-            f"  awf-deploy\n"
-            f"\nThen run `awf-submit-bing` again.",
-            file=sys.stderr,
-        )
-        return 3  # manual gate
+    with log.session(composer="awf-submit-bing", target="landing", start=project_root):
+        with log.invoke(skill="awf-submit-bing", args=safe_args):
+            # ── Stage 1 ────────────────────────────────────────────────────
+            key = ensure_key(project_root, passport, opts["regenerate_key"])
 
-    print(_color(f"- key file live: {detail}", GREEN))
+            # Verify the key file is live on the deployed site.
+            reachable, detail = key_file_reachable(domain, key)
+            if not reachable:
+                print(_color(f"- key file not reachable: {detail}", YELLOW))
+                print(
+                    f"\nThe IndexNow key file is in your project at "
+                    f"static/{key}.txt but Bing can't see it yet — you need to "
+                    f"redeploy.\n"
+                    f"  cd {project_root}\n"
+                    f"  awf-deploy\n"
+                    f"\nThen run `awf-submit-bing` again.",
+                    file=sys.stderr,
+                )
+                log.gate(
+                    name="indexnow_key_live",
+                    reason="IndexNow key file written to static/ but not yet deployed; Bing cannot verify it.",
+                    instructions="Run `awf-deploy` to publish the key file, then re-run `awf-submit-bing`.",
+                )
+                return 3  # manual gate
 
-    # ── Manual Bing-Webmaster gate ────────────────────────────────
-    if not gate_bing_imported(passport, opts["confirm_imported"]):
-        print(
-            "\nBing Webmaster requires a one-time browser registration that\n"
-            "this skill cannot automate (Microsoft OAuth-only):\n\n"
-            "  1. Open https://www.bing.com/webmasters\n"
-            "  2. Sign in with the Microsoft account that owns this site\n"
-            f"  3. Add the property by importing it from Google Search Console\n"
-            f"  4. Confirm the sitemap submission for {domain}\n\n"
-            "Once done, re-run with --confirm-imported to proceed.",
-            file=sys.stderr,
-        )
-        return 3  # manual gate
+            print(_color(f"- key file live: {detail}", GREEN))
 
-    # ── Stage 2 ────────────────────────────────────────────────────
-    try:
-        urls = fetch_sitemap_urls(domain)
-    except IndexNowError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 1
-    if not urls:
-        print(_color("- sitemap is empty; nothing to submit", YELLOW))
-        passport.mark_gate("submit_bing", meta={"submitted": 0, "outcome": "noop"})
-        passport.save(project_root)
-        return 0
+            # ── Manual Bing-Webmaster gate ────────────────────────────────
+            if not gate_bing_imported(passport, opts["confirm_imported"]):
+                print(
+                    "\nBing Webmaster requires a one-time browser registration that\n"
+                    "this skill cannot automate (Microsoft OAuth-only):\n\n"
+                    "  1. Open https://www.bing.com/webmasters\n"
+                    "  2. Sign in with the Microsoft account that owns this site\n"
+                    f"  3. Add the property by importing it from Google Search Console\n"
+                    f"  4. Confirm the sitemap submission for {domain}\n\n"
+                    "Once done, re-run with --confirm-imported to proceed.",
+                    file=sys.stderr,
+                )
+                log.gate(
+                    name="bing_imported",
+                    reason="Bing Webmaster property registration requires a one-time manual browser step (Microsoft OAuth-only).",
+                    instructions=(
+                        "1. Open https://www.bing.com/webmasters  "
+                        "2. Sign in with the Microsoft account that owns this site  "
+                        "3. Add the property by importing it from Google Search Console  "
+                        f"4. Confirm the sitemap submission for {domain}  "
+                        "Then re-run with --confirm-imported."
+                    ),
+                )
+                return 3  # manual gate
 
-    print(f"- found {len(urls)} URL(s) in sitemap")
-    try:
-        submitted = submit_urls(domain, key, urls)
-    except IndexNowError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 1
+            # ── Stage 2 ────────────────────────────────────────────────────
+            try:
+                urls = fetch_sitemap_urls(domain)
+            except IndexNowError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            if not urls:
+                print(_color("- sitemap is empty; nothing to submit", YELLOW))
+                passport.mark_gate("submit_bing", meta={"submitted": 0, "outcome": "noop"})
+                passport.save(project_root)
+                return 0
 
-    print(_color(f"- submitted {submitted} URL(s) to IndexNow", GREEN))
-    passport.mark_gate(
-        "submit_bing",
-        meta={"submitted": submitted, "outcome": "ok"},
-    )
-    passport.save(project_root)
-    return 0
+            print(f"- found {len(urls)} URL(s) in sitemap")
+            try:
+                submitted = submit_urls(domain, key, urls)
+            except IndexNowError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+
+            print(_color(f"- submitted {submitted} URL(s) to IndexNow", GREEN))
+            passport.mark_gate(
+                "submit_bing",
+                meta={"submitted": submitted, "outcome": "ok"},
+            )
+            passport.save(project_root)
+            return 0
 
 
 if __name__ == "__main__":

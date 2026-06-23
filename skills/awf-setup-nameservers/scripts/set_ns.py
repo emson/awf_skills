@@ -29,8 +29,12 @@ from pathlib import Path
 AWF_HOME = Path(
     os.environ.get("AWF_HOME") or Path(__file__).resolve().parents[3]
 ).resolve()
+# Repo root first (so `from lib import log` resolves to the SAME lib.log module
+# that passport.py uses — shared ContextVars), then lib/ for sibling imports.
+sys.path.insert(0, str(AWF_HOME))
 sys.path.insert(0, str(AWF_HOME / "lib"))
 
+from lib import log  # noqa: E402
 from project import find_project_root, ProjectNotFound  # noqa: E402
 from passport import Passport  # noqa: E402
 from slug import normalize_domain  # noqa: E402
@@ -115,28 +119,52 @@ def main(argv: list[str]) -> int:
     passport = Passport.load(project_root)
     domain = normalize_domain(passport.domain)
 
-    nameservers = resolve_nameservers(
-        cli_value=opts["nameservers"],
-        project_root=project_root,
-        passport=passport,
-        domain=domain,
-    )
+    safe_args: dict = {"domain": domain}
+    if opts["nameservers"]:
+        safe_args["nameservers"] = opts["nameservers"]
 
-    try:
-        with get_nc_client(project_root=project_root, awf_home=AWF_HOME) as nc:
-            changed, current = get_or_set_custom_dns(nc, domain, nameservers)
-    except NamecheapError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 1
+    with log.session(composer="awf-setup-nameservers", target="landing", start=project_root):
+        with log.invoke(skill="awf-setup-nameservers", args=safe_args):
+            nameservers = resolve_nameservers(
+                cli_value=opts["nameservers"],
+                project_root=project_root,
+                passport=passport,
+                domain=domain,
+            )
 
-    passport.mark_gate(
-        "nameservers_setup",
-        meta={
-            "nameservers": current,
-            "outcome": "updated" if changed else "noop",
-        },
-    )
-    passport.save(project_root)
+            try:
+                with get_nc_client(project_root=project_root, awf_home=AWF_HOME) as nc:
+                    changed, current = get_or_set_custom_dns(nc, domain, nameservers)
+            except NamecheapError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+
+            passport.mark_gate(
+                "nameservers_setup",
+                meta={
+                    "nameservers": current,
+                    "outcome": "updated" if changed else "noop",
+                },
+            )
+            passport.save(project_root)
+
+            if changed:
+                log.gate(
+                    name="nameservers_propagation",
+                    reason=(
+                        "Nameservers at Namecheap have been updated to point at "
+                        "Cloudflare, but DNS propagation is asynchronous and may "
+                        "take up to 48 hours. This is an inherently manual/async step."
+                    ),
+                    instructions=(
+                        "Wait for DNS propagation to complete (typically 1–24 h). "
+                        "Check with: dig NS {domain} +short  OR  "
+                        "https://dnschecker.org/#NS/{domain} . "
+                        "Once the Cloudflare nameservers are visible globally, "
+                        "Cloudflare will mark the zone as active automatically."
+                    ).format(domain=domain),
+                )
+
     return 0
 
 

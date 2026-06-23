@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 import json
 import re
+import sys
 
 from slug import domain_to_project_name  # noqa: I100 — sibling import via lib path
 
@@ -24,6 +25,25 @@ SCHEMA_VERSION_MIN = "1.0"
 PASSPORT_FILENAME = "passport.json"
 
 _DOMAIN_RE = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}$")
+
+
+def _emit_state_change(file: Path, before: dict[str, Any], after: dict[str, Any]) -> None:
+    """Emit a state.change log event for a passport save (best-effort).
+
+    Identical contract to lib/state.py:_emit_state_change — whole-file diff,
+    key="". Import-safe: if lib.log is unavailable, no-ops. Never raises;
+    logging is observability, not the critical path (D-002). The lazy import
+    keeps this module standard-library-only at import time.
+    """
+    try:
+        from lib import log  # type: ignore[attr-defined]
+
+        log.state_change(file=str(file), key="", before=before, after=after)
+    except ImportError:
+        return
+    except Exception as e:  # noqa: BLE001
+        print(f"warn: log.state_change failed: {e}", file=sys.stderr)
+        return
 
 
 @dataclass
@@ -103,10 +123,21 @@ class Passport:
 
     def save(self, project_root: Path) -> None:
         path = project_root / PASSPORT_FILENAME
+        # Capture before-state for the log event (whole-file diff). Mirrors
+        # lib/state.py:_save_impl so passport mutations are captured in the
+        # event log without each skill remembering to log them (D-011).
+        before: dict[str, Any] = {}
+        if path.exists():
+            try:
+                before = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                before = {}
+        after = _to_dict(self)
         path.write_text(
-            json.dumps(_to_dict(self), indent=4, ensure_ascii=False) + "\n",
+            json.dumps(after, indent=4, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+        _emit_state_change(path, before, after)
 
     # ── validation ─────────────────────────────────────────────────────
 

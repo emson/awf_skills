@@ -28,8 +28,12 @@ from pathlib import Path
 AWF_HOME = Path(
     os.environ.get("AWF_HOME") or Path(__file__).resolve().parents[3]
 ).resolve()
+# Repo root first (so `from lib import log` resolves to the SAME lib.log module
+# that passport.py uses — shared ContextVars), then lib/ for sibling imports.
+sys.path.insert(0, str(AWF_HOME))
 sys.path.insert(0, str(AWF_HOME / "lib"))
 
+from lib import log  # noqa: E402
 from project import find_project_root, ProjectNotFound  # noqa: E402
 from passport import Passport  # noqa: E402
 
@@ -57,50 +61,60 @@ def parse_args(argv: list[str]) -> dict:
 def main(argv: list[str]) -> int:
     opts = parse_args(argv)
 
+    # Resolve project root outside the session (pattern from plan_004 lesson M1).
     try:
         root = find_project_root()
     except ProjectNotFound as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
-    passport = Passport.load(root)
-    problems = passport.validate()
+    safe_args = {"mark_reviewed": opts["mark_gate"]}
 
-    errors  = [p for p in problems if not p.startswith("warn:")]
-    warns   = [p[len("warn:"):].strip() for p in problems if p.startswith("warn:")]
+    with log.session(composer="awf-review-passport", target="landing", start=root):
+        with log.invoke(skill="awf-review-passport", args=safe_args):
+            passport = Passport.load(root)
+            problems = passport.validate()
 
-    print(f"awf-review-passport — {root / 'passport.json'}")
-    print("─" * 60)
-    print(f"  domain          : {passport.domain}")
-    print(f"  project_name    : {passport.project_name}")
-    print(f"  schema_version  : {passport.schema_version}")
-    print(f"  template_version: {passport.template_version}")
-    print(f"  fathom_site_id  : {passport.fathom_site_id or '(unset)'}")
-    print(f"  faqs            : {len(passport.faqs)} entries")
-    print()
+            errors  = [p for p in problems if not p.startswith("warn:")]
+            warns   = [p[len("warn:"):].strip() for p in problems if p.startswith("warn:")]
 
-    if errors:
-        for e in errors:
-            print(_color(f"  [ERR]  {e}", RED))
-    if warns:
-        for w in warns:
-            print(_color(f"  [WARN] {w}", YELLOW))
-    if not errors and not warns:
-        print(_color("  no issues found", GREEN))
+            print(f"awf-review-passport — {root / 'passport.json'}")
+            print("─" * 60)
+            print(f"  domain          : {passport.domain}")
+            print(f"  project_name    : {passport.project_name}")
+            print(f"  schema_version  : {passport.schema_version}")
+            print(f"  template_version: {passport.template_version}")
+            print(f"  fathom_site_id  : {passport.fathom_site_id or '(unset)'}")
+            print(f"  faqs            : {len(passport.faqs)} entries")
+            print()
 
-    if errors:
-        print()
-        print(_color(f"{len(errors)} error(s); refusing to mark reviewed.", RED))
-        return 1
+            if errors:
+                for e in errors:
+                    print(_color(f"  [ERR]  {e}", RED))
+            if warns:
+                for w in warns:
+                    print(_color(f"  [WARN] {w}", YELLOW))
+            if not errors and not warns:
+                print(_color("  no issues found", GREEN))
 
-    if opts["mark_gate"]:
-        passport.mark_gate("passport_reviewed", meta={"warnings": len(warns)})
-        passport.save(root)
-        print()
-        print(_color("- gate `passport_reviewed` marked complete.", GREEN))
-    else:
-        print()
-        print("Pass --mark-reviewed once you've inspected the file to advance the launch gate.")
+            if errors:
+                print()
+                print(_color(f"{len(errors)} error(s); refusing to mark reviewed.", RED))
+                return 1
+
+            if opts["mark_gate"]:
+                log.gate(
+                    name="passport_reviewed",
+                    reason="Human confirmed passport.json is ready for launch.",
+                    instructions="Run `awf-review-passport --mark-reviewed` after inspecting passport.json.",
+                )
+                passport.mark_gate("passport_reviewed", meta={"warnings": len(warns)})
+                passport.save(root)
+                print()
+                print(_color("- gate `passport_reviewed` marked complete.", GREEN))
+            else:
+                print()
+                print("Pass --mark-reviewed once you've inspected the file to advance the launch gate.")
 
     return 0
 

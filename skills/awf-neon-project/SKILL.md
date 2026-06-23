@@ -1,6 +1,6 @@
 ---
 name: awf-neon-project
-description: Provision one Neon Postgres project for a project. Writes the Neon project ID into .awf/infra.json (Infra.neon.project_id). Idempotent — re-running with the same name is a no-op.
+description: Provision one Neon Postgres project — the top-level container. Run this before awf-neon-branch, which adds branches to it. Writes the Neon project ID into .awf/infra.json (Infra.neon.project_id). Idempotent — re-running with the same name is a no-op.
 ---
 
 # Purpose

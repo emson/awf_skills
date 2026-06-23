@@ -29,8 +29,12 @@ from pathlib import Path
 AWF_HOME = Path(
     os.environ.get("AWF_HOME") or Path(__file__).resolve().parents[3]
 ).resolve()
+# Repo root first (so `from lib import log` resolves to the SAME lib.log module
+# that passport.py uses — shared ContextVars), then lib/ for sibling imports.
+sys.path.insert(0, str(AWF_HOME))
 sys.path.insert(0, str(AWF_HOME / "lib"))
 
+from lib import log  # noqa: E402
 from project import find_project_root, ProjectNotFound  # noqa: E402
 from passport import Passport  # noqa: E402
 from slug import normalize_domain  # noqa: E402
@@ -76,58 +80,72 @@ def main(argv: list[str]) -> int:
     passport = Passport.load(project_root)
     domain = normalize_domain(passport.domain)
 
-    # 1. Confirm the property exists; bail if not.
-    try:
-        info = get_or_add_site(domain, project_root=project_root, awf_home=AWF_HOME)
-    except GscError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 1
+    safe_args = {"sitemap_path": opts["sitemap_path"]}
 
-    # 2. Verify (no-op if already verified).
-    if is_verified(info):
-        print(_color(f"- {sc_domain(domain)} is already verified", GREEN))
-    else:
-        try:
-            resp = verify_site(domain, project_root=project_root, awf_home=AWF_HOME)
-            print(_color(f"- verification response: {resp.get('id', resp)}", GREEN))
-        except GscError as e:
-            msg = str(e)
-            print(f"error: {msg}", file=sys.stderr)
-            if "Failed to verify" in msg or "verification" in msg.lower():
-                print(
-                    "\nThis usually means the TXT record hasn't propagated yet.\n"
-                    "Wait 2–5 minutes and re-run `awf-verify-gsc`.",
-                    file=sys.stderr,
+    with log.session(composer="awf-verify-gsc", target="landing", start=project_root):
+        with log.invoke(skill="awf-verify-gsc", args=safe_args):
+            # 1. Confirm the property exists; bail if not.
+            try:
+                info = get_or_add_site(domain, project_root=project_root, awf_home=AWF_HOME)
+            except GscError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+
+            # 2. Verify (no-op if already verified).
+            if is_verified(info):
+                print(_color(f"- {sc_domain(domain)} is already verified", GREEN))
+            else:
+                try:
+                    resp = verify_site(domain, project_root=project_root, awf_home=AWF_HOME)
+                    print(_color(f"- verification response: {resp.get('id', resp)}", GREEN))
+                except GscError as e:
+                    msg = str(e)
+                    print(f"error: {msg}", file=sys.stderr)
+                    if "Failed to verify" in msg or "verification" in msg.lower():
+                        print(
+                            "\nThis usually means the TXT record hasn't propagated yet.\n"
+                            "Wait 2–5 minutes and re-run `awf-verify-gsc`.",
+                            file=sys.stderr,
+                        )
+                    return 1
+
+            # Brief pause before submitting sitemap — gives Google time to flip
+            # the property's verified state internally so the sitemap submit
+            # doesn't bounce.
+            time.sleep(3)
+
+            sitemap_url = f"https://{domain}{opts['sitemap_path']}"
+            try:
+                submit_sitemap(
+                    domain, sitemap_url,
+                    project_root=project_root, awf_home=AWF_HOME,
                 )
-            return 1
+            except GscError as e:
+                print(f"error submitting sitemap: {e}", file=sys.stderr)
+                # We *did* verify — record that partial success.
+                passport.mark_gate(
+                    "gsc_verify",
+                    meta={"verified": True, "sitemap": "failed", "error": str(e)[:200]},
+                )
+                log.gate(
+                    name="gsc_verify",
+                    reason="GSC property verified but sitemap submission failed; partial success recorded.",
+                    instructions="Check the sitemap URL is accessible, then re-run `awf-verify-gsc`.",
+                )
+                passport.save(project_root)
+                return 1
 
-    # Brief pause before submitting sitemap — gives Google time to flip
-    # the property's verified state internally so the sitemap submit
-    # doesn't bounce.
-    time.sleep(3)
-
-    sitemap_url = f"https://{domain}{opts['sitemap_path']}"
-    try:
-        submit_sitemap(
-            domain, sitemap_url,
-            project_root=project_root, awf_home=AWF_HOME,
-        )
-    except GscError as e:
-        print(f"error submitting sitemap: {e}", file=sys.stderr)
-        # We *did* verify — record that partial success.
-        passport.mark_gate(
-            "gsc_verify",
-            meta={"verified": True, "sitemap": "failed", "error": str(e)[:200]},
-        )
-        passport.save(project_root)
-        return 1
-
-    print(_color(f"- submitted sitemap: {sitemap_url}", GREEN))
-    passport.mark_gate(
-        "gsc_verify",
-        meta={"verified": True, "sitemap": sitemap_url, "outcome": "ok"},
-    )
-    passport.save(project_root)
+            print(_color(f"- submitted sitemap: {sitemap_url}", GREEN))
+            passport.mark_gate(
+                "gsc_verify",
+                meta={"verified": True, "sitemap": sitemap_url, "outcome": "ok"},
+            )
+            log.gate(
+                name="gsc_verify",
+                reason="GSC property verified and sitemap submitted successfully.",
+                instructions="",
+            )
+            passport.save(project_root)
     return 0
 
 
