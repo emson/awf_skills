@@ -30,6 +30,21 @@ def search_dns_record(
     return None
 
 
+def _normalize_txt_content(record_type: str, content: str) -> str:
+    """Cloudflare stores TXT content in DNS presentation format, which
+    requires the value to be wrapped in quotation marks. The API accepts
+    unquoted input but re-quotes it server-side, which breaks the
+    search-or-create match on a re-run (unquoted vs. quoted content) and
+    triggers a "must be in quotation marks" warning. Quote it up front so
+    what we search for is what Cloudflare will actually store.
+    """
+    if record_type != "TXT":
+        return content
+    if content.startswith('"') and content.endswith('"'):
+        return content
+    return f'"{content}"'
+
+
 def create_dns_record(
     client: CloudflareClient,
     domain_name: str,
@@ -40,6 +55,8 @@ def create_dns_record(
     proxied: bool = True,
 ):
     """Idempotent. Returns the (existing or newly-created) record."""
+    content = _normalize_txt_content(record_type, content)
+
     zone = get_zone(client, domain_name)
     if zone is None:
         raise RuntimeError(

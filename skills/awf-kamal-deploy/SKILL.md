@@ -1,6 +1,6 @@
 ---
 name: awf-kamal-deploy
-description: Run `kamal deploy` and record Infra.kamal.last_deploy_image on success. Always invokes kamal; action reflects state-file delta only.
+description: Run `kamal deploy` against the config/deploy.yml rendered by awf-kamal-config, and record Infra.kamal.last_deploy_image on success. Always invokes kamal; action reflects state-file delta only.
 ---
 
 # Purpose

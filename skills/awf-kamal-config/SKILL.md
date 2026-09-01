@@ -1,6 +1,6 @@
 ---
 name: awf-kamal-config
-description: Render config/deploy.yml from Infra state via KamalConfig.render(). Records Infra.kamal.config_path. Idempotent — re-running with the same path is a no-op at the state-file level.
+description: Render config/deploy.yml from Infra state via KamalConfig.render() — run before awf-kamal-deploy, which deploys the rendered file. Records Infra.kamal.config_path. Idempotent — re-running with the same path is a no-op at the state-file level.
 ---
 
 # Purpose

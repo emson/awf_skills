@@ -77,6 +77,11 @@ def main(argv: list[str]) -> int:
                 get_or_create_project_domain(cf, account_id, project_name, domain)
 
                 # 3. DNS records
+                # CNAME at the zone apex is normally invalid DNS (RFC 1912);
+                # Cloudflare allows it via CNAME flattening and resolves it
+                # to an IP server-side. This is the documented way to point
+                # a root domain at Pages — the dashboard's "CNAME flattening"
+                # notice on this record is informational, not an error.
                 create_dns_record(
                     cf, domain, "CNAME", domain, f"{project_name}.pages.dev",
                     proxied=True,
